@@ -12,6 +12,7 @@ from config_loader import AppConfig
 from logging_utils import get_logger
 from script_parser import ScriptDocument
 from timeline_builder import Scene, TimelineBuilder, TimelinePlan
+from thumbnail_generator import ThumbnailGenerator
 from video_generator import ScenePlan, TextSegmentPlan, VideoGenerator
 
 logger = get_logger(__name__)
@@ -50,6 +51,7 @@ class PipelineResult:
     scenes: List[SceneOutput]
     total_duration: float
     video_path: Path
+    thumbnail_path: Path | None
 
 
 class LongFormPipeline:
@@ -93,6 +95,15 @@ class LongFormPipeline:
             thumbnail_title=document.thumbnail_title or "Longform Video",
         )
 
+        thumbnail_generator = ThumbnailGenerator(self.config.raw)
+        thumbnail_path = self._generate_thumbnail(
+            generator=thumbnail_generator,
+            run_dir=run_dir,
+            run_id=run_id,
+            document=document,
+            scenes=scenes_output,
+        )
+
         result = PipelineResult(
             run_id=run_id,
             output_dir=run_dir,
@@ -101,6 +112,7 @@ class LongFormPipeline:
             scenes=scenes_output,
             total_duration=total_duration,
             video_path=video_output_path,
+            thumbnail_path=thumbnail_path,
         )
 
         self._write_plan(result, document)
@@ -191,6 +203,7 @@ class LongFormPipeline:
             "thumbnail_title": document.thumbnail_title,
             "total_duration_seconds": result.total_duration,
             "video_path": str(result.video_path.relative_to(result.output_dir)),
+            "thumbnail_path": str(result.thumbnail_path) if result.thumbnail_path else None,
             "scenes": [asdict(scene_output) for scene_output in result.scenes],
             "notes": {
                 "description": "Generated with MoviePy. Replace assets or re-render as needed.",
@@ -198,6 +211,37 @@ class LongFormPipeline:
         }
         result.plan_file.write_text(json.dumps(plan_payload, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.debug("Plan file written: %s", result.plan_file)
+
+    def _generate_thumbnail(
+        self,
+        *,
+        generator: ThumbnailGenerator,
+        run_dir: Path,
+        run_id: str,
+        document: ScriptDocument,
+        scenes: List[SceneOutput],
+    ) -> Path | None:
+        base_image = self._select_thumbnail_image(run_dir, scenes)
+        title = document.thumbnail_title or "Longform Video"
+        output_name = f"thumbnail_{run_id}.png"
+        try:
+            return generator.generate(
+                title=title,
+                base_image=base_image,
+                output_name=output_name,
+                subtitle=None,
+            )
+        except Exception as exc:  # pragma: no cover - safeguarding pipeline
+            logger.exception("Thumbnail generation failed: %s", exc)
+            return None
+
+    def _select_thumbnail_image(self, run_dir: Path, scenes: List[SceneOutput]) -> Path | None:
+        for scene in scenes:
+            if scene.image_path:
+                candidate = run_dir / scene.image_path
+                if candidate.exists():
+                    return candidate
+        return None
 
     def _write_timeline(self, result: PipelineResult) -> None:
         timeline_payload = {
