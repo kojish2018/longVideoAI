@@ -1,0 +1,21 @@
+# Local credentials (never commit real secrets)
+credentials/*.json
+config.yaml
+
+repo_clone/
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+
+# Logs and outputs
+data/
+output/
+logs/
+
+sample_txt/
+visual_img/
+
+# OS-specific cruft
+.DS_Store
