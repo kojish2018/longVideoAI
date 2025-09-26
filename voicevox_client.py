@@ -25,10 +25,29 @@ class VoicevoxClient:
         self.host = voice_cfg.get("host", "127.0.0.1")
         self.port = voice_cfg.get("port", 50021)
         self.speaker_id = voice_cfg.get("speaker_id", 3)
-        self.speed_scale = voice_cfg.get("speed_scale", 1.0)
-        self.volume_scale = voice_cfg.get("volume_scale", 1.0)
-        self.intonation_scale = voice_cfg.get("intonation_scale", 1.0)
-        self.pitch_scale = voice_cfg.get("pitch_scale", 1.0)
+        self.speed_scale = float(voice_cfg.get("speed_scale", 1.0) or 1.0)
+        self.volume_scale = float(voice_cfg.get("volume_scale", 1.0) or 1.0)
+        self.intonation_scale = float(voice_cfg.get("intonation_scale", 1.0) or 1.0)
+        self.pitch_scale = float(voice_cfg.get("pitch_scale", 1.0) or 1.0)
+
+        raw_sampling_rate = voice_cfg.get("output_sampling_rate")
+        try:
+            self.output_sampling_rate = (
+                int(raw_sampling_rate)
+                if raw_sampling_rate is not None and str(raw_sampling_rate).strip()
+                else None
+            )
+        except (TypeError, ValueError):
+            logger.warning("Invalid output_sampling_rate=%s; falling back to default", raw_sampling_rate)
+            self.output_sampling_rate = None
+
+        raw_stereo = voice_cfg.get("output_stereo")
+        if isinstance(raw_stereo, str):
+            self.output_stereo = raw_stereo.strip().lower() in {"1", "true", "yes", "on"}
+        elif raw_stereo is None:
+            self.output_stereo = None
+        else:
+            self.output_stereo = bool(raw_stereo)
 
         self.base_url = f"http://{self.host}:{self.port}"
         self._connection_verified = False
@@ -52,14 +71,22 @@ class VoicevoxClient:
         except VoicevoxError as exc:
             logger.error("VOICEVOX unavailable (%s); writing silent audio", exc)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            duration = self._write_silent_wav(output_path, 3.0)
+            duration = self._write_silent_wav(
+                output_path,
+                3.0,
+                sample_rate=self.output_sampling_rate or 44100,
+            )
             return output_path, duration
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         if not text.strip():
             logger.warning("Empty text supplied to VOICEVOX; writing silent audio")
-            duration = self._write_silent_wav(output_path, 1.0)
+            duration = self._write_silent_wav(
+                output_path,
+                1.0,
+                sample_rate=self.output_sampling_rate or 44100,
+            )
             return output_path, duration
 
         try:
@@ -70,7 +97,11 @@ class VoicevoxClient:
             return output_path, duration
         except (VoicevoxError, requests.RequestException) as exc:
             logger.error("VOICEVOX synthesis failed (%s). Falling back to silence.", exc)
-            duration = self._write_silent_wav(output_path, 3.0)
+            duration = self._write_silent_wav(
+                output_path,
+                3.0,
+                sample_rate=self.output_sampling_rate or 44100,
+            )
             return output_path, duration
 
     def _create_audio_query(self, text: str) -> Dict[str, Any]:
@@ -80,10 +111,18 @@ class VoicevoxClient:
         response.raise_for_status()
         audio_query: Dict[str, Any] = response.json()
 
-        audio_query["speedScale"] = self.speed_scale
-        audio_query["volumeScale"] = self.volume_scale
-        audio_query["intonationScale"] = self.intonation_scale
-        audio_query["pitchScale"] = self.pitch_scale
+        if self.speed_scale != 1.0:
+            audio_query["speedScale"] = self.speed_scale
+        if self.volume_scale != 1.0:
+            audio_query["volumeScale"] = self.volume_scale
+        if self.intonation_scale != 1.0:
+            audio_query["intonationScale"] = self.intonation_scale
+        if self.pitch_scale != 1.0:
+            audio_query["pitchScale"] = self.pitch_scale
+        if self.output_sampling_rate is not None:
+            audio_query["outputSamplingRate"] = self.output_sampling_rate
+        if self.output_stereo is not None:
+            audio_query["outputStereo"] = self.output_stereo
         return audio_query
 
     def _synthesize_audio(self, audio_query: Dict[str, Any], output_path: Path) -> None:
@@ -108,8 +147,7 @@ class VoicevoxClient:
             return frames / float(sample_rate)
 
     @staticmethod
-    def _write_silent_wav(path: Path, duration: float) -> float:
-        sample_rate = 44100
+    def _write_silent_wav(path: Path, duration: float, *, sample_rate: int = 44100) -> float:
         sample_count = int(sample_rate * duration)
         silent = array("h", [0]) * sample_count
         with wave.open(str(path), "wb") as wav_file:

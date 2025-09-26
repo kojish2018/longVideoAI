@@ -66,10 +66,22 @@ class TimelineBuilder:
         self.words_per_second = max(words_per_minute / 60.0, 0.1)
         self.padding_seconds = float(config.get("simple_mode", {}).get("padding_seconds", 0.5))
 
+        simple_cfg = config.get("simple_mode", {})
+        self.duration_mode = str(simple_cfg.get("duration_mode", "voice")).lower()
+
         sections_cfg = config.get("sections", {})
         self.default_duration = float(sections_cfg.get("default_duration_seconds", 60))
         self.min_duration = float(sections_cfg.get("min_duration_seconds", 5))
         self.max_duration = float(sections_cfg.get("max_duration_seconds", 120))
+        raw_max_chunks = sections_cfg.get("max_chunks_per_scene")
+        try:
+            max_chunks = int(raw_max_chunks) if raw_max_chunks is not None else 10
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid max_chunks_per_scene=%s; falling back to default", raw_max_chunks
+            )
+            max_chunks = 10
+        self.max_chunks_per_scene = max_chunks if max_chunks > 0 else 0
 
         bgm_library = config.get("bgm", {}).get("library", [])
         self.bgm_cycle = [track.get("id") for track in bgm_library if track.get("id")]
@@ -107,6 +119,18 @@ class TimelineBuilder:
 
             if not group_chunks:
                 group_chunks.append(chunk)
+                group_duration = chunk.estimated_duration
+                continue
+
+            if self.max_chunks_per_scene and len(group_chunks) >= self.max_chunks_per_scene:
+                scenes.append(
+                    self._finalize_content_scene(
+                        scene_counter, current_start, group_chunks
+                    )
+                )
+                current_start += group_duration
+                scene_counter += 1
+                group_chunks = [chunk]
                 group_duration = chunk.estimated_duration
                 continue
 
@@ -189,10 +213,17 @@ class TimelineBuilder:
             min_duration = max(self.padding_seconds, 3.0)
             max_duration = max(min_duration, self.max_duration)
         else:
-            min_duration = self.min_duration
+            if self.duration_mode == "voice":
+                min_duration = max(self.padding_seconds, 1.0)
+            else:
+                min_duration = self.min_duration
             max_duration = self.max_duration
 
-        clamped = min(max(voice_seconds, min_duration), max_duration)
+        candidate = max(voice_seconds, min_duration)
+        if max_duration > 0:
+            clamped = min(candidate, max_duration)
+        else:
+            clamped = candidate
         logger.debug(
             "Section %d type=%s word_count=%d -> duration %.2f seconds",
             section.index,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import ceil
 from pathlib import Path
 from typing import List
 
@@ -18,7 +19,19 @@ class ScriptSection:
 
     @property
     def word_count(self) -> int:
-        return sum(len(line.split()) for line in self.lines)
+        tokens = [line.split() for line in self.lines]
+        word_based = sum(len(parts) for parts in tokens)
+        if word_based >= 3:
+            return word_based
+
+        joined = "".join(line.strip() for line in self.lines)
+        char_count = len(joined)
+        if char_count == 0:
+            return 0
+
+        # 日本語など空白を含まないテキストは概ね3文字で1語換算
+        estimated_words = ceil(char_count / 3)
+        return max(word_based, estimated_words)
 
 
 @dataclass

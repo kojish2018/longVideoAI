@@ -13,6 +13,7 @@ __pycache__/
 data/
 output/
 logs/
+temp/
 
 sample_txt/
 visual_img/

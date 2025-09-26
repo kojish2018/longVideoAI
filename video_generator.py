@@ -28,6 +28,8 @@ class RenderConfig:
     preset: str
     crf: Optional[int]
     audio_codec: str
+    audio_bitrate: Optional[str]
+    audio_sample_rate: int
     padding_seconds: float
     ken_burns_zoom: float
     ken_burns_offset: float
@@ -77,6 +79,8 @@ class VideoGenerator:
             preset=str(video_cfg.get("preset", "ultrafast")),
             crf=int(video_cfg.get("crf", 20)) if video_cfg.get("crf") else 20,
             audio_codec=str(video_cfg.get("audio_codec", "aac")),
+            audio_bitrate=video_cfg.get("audio_bitrate"),
+            audio_sample_rate=int(video_cfg.get("audio_sample_rate", 48000)),
             padding_seconds=float(animation_cfg.get("padding_seconds", 0.35)),
             ken_burns_zoom=float(animation_cfg.get("ken_burns_zoom", 0.03)),
             ken_burns_offset=float(animation_cfg.get("ken_burns_offset", 0.01)),
@@ -121,9 +125,16 @@ class VideoGenerator:
                 fps=self.render_cfg.fps,
                 codec=self.render_cfg.codec,
                 audio_codec=self.render_cfg.audio_codec,
+                audio_fps=self.render_cfg.audio_sample_rate,
+                audio_bitrate=self.render_cfg.audio_bitrate,
                 bitrate=self.render_cfg.bitrate,
                 preset=self.render_cfg.preset,
-                ffmpeg_params=["-crf", str(self.render_cfg.crf)],
+                ffmpeg_params=[
+                    "-crf",
+                    str(self.render_cfg.crf),
+                    "-ar",
+                    str(self.render_cfg.audio_sample_rate),
+                ],
                 temp_audiofile=str(temp_audio),
                 remove_temp=True,
                 threads=4,
@@ -204,15 +215,25 @@ class VideoGenerator:
             zoom = self.render_cfg.ken_burns_zoom
             offset = self.render_cfg.ken_burns_offset
 
-            clip = clip.resize(lambda t: 1 + zoom * (t / max(duration, 0.01)))
+            src_w, src_h = clip.size
+            target_w = self.render_cfg.width
+            target_h = self.render_cfg.height
+            if src_w == 0 or src_h == 0:
+                base_scale = 1.0
+            else:
+                base_scale = max(target_w / src_w, target_h / src_h)
+
+            clip = clip.resize(
+                lambda t: base_scale * (1 + zoom * (t / max(duration, 0.01)))
+            )
             clip = clip.set_position(
                 lambda t: (
-                    -self.render_cfg.width * offset * (t / max(duration, 0.01)),
-                    -self.render_cfg.height * offset * (t / max(duration, 0.01)),
+                    -target_w * offset * (t / max(duration, 0.01)),
+                    -target_h * offset * (t / max(duration, 0.01)),
                 )
             )
             clip = clip.on_color(
-                size=(self.render_cfg.width, self.render_cfg.height),
+                size=(target_w, target_h),
                 color=(0, 0, 0),
                 pos=("center", "center"),
             )
@@ -245,12 +266,13 @@ class VideoGenerator:
 
         font = self._get_font(self.render_cfg.body_font_size)
         line_spacing = int(font.size * 1.2)
-        margin_x = int(self.render_cfg.width * 0.06)
         margin_y = int(band_height * 0.13)
 
         y = margin_y
         for line in segment.lines:
-            draw.text((margin_x, y), line, font=font, fill=self.render_cfg.body_color)
+            text_width, text_height = self._measure_text(font, line)
+            x = max(0, int((self.render_cfg.width - text_width) / 2))
+            draw.text((x, y), line, font=font, fill=self.render_cfg.body_color)
             y += line_spacing
 
         overlay_dir = run_dir / "overlays"
@@ -287,7 +309,7 @@ class VideoGenerator:
                 ((self.render_cfg.width - text_width) / 2, current_y),
                 line,
                 font=font,
-                fill=self.render_cfg.body_color,
+                fill=(255, 255, 255),
             )
             current_y += text_height + font.size * 0.6
 
