@@ -237,7 +237,8 @@ class TimelineBuilder:
         if not chunks:
             return None
         first_chunk = chunks[0]
-        return first_chunk.lines[0] if first_chunk.lines else None
+        text = first_chunk.text.strip()
+        return text if text else None
 
     def _select_bgm(self, index: int) -> Optional[str]:
         if not self.bgm_cycle:

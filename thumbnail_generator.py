@@ -22,11 +22,11 @@ else:  # pragma: no cover - Pillow < 9.1 fallback
 class ThumbnailSpec:
     width: int = 1280
     height: int = 720
-    title_font_size: int = 72
-    subtitle_font_size: int = 54
+    title_font_size: int = 120
+    subtitle_font_size: int = 64
     overlay_rgba: Optional[Tuple[int, int, int, int]] = None
-    top_band_ratio: float = 0.42
-    gap: int = 8
+    top_band_ratio: float = 0.28
+    gap: int = 6
 
 
 class ThumbnailGenerator:
@@ -40,9 +40,11 @@ class ThumbnailGenerator:
 
         width = int(thumb_cfg.get("width", 1280)) if thumb_cfg else 1280
         height = int(thumb_cfg.get("height", 720)) if thumb_cfg else 720
-        title_size = int(thumb_cfg.get("title_font_size", 72)) if thumb_cfg else 72
-        subtitle_size = int(thumb_cfg.get("subtitle_font_size", 54)) if thumb_cfg else 54
+        title_size = int(thumb_cfg.get("title_font_size", 120)) if thumb_cfg else 120
+        subtitle_size = int(thumb_cfg.get("subtitle_font_size", 64)) if thumb_cfg else 64
         overlay = _parse_color(thumb_cfg.get("overlay_color")) if thumb_cfg else None
+        ratio = _parse_ratio(thumb_cfg.get("top_band_ratio"), default=0.28)
+        gap = _parse_int(thumb_cfg.get("gap"), default=6, minimum=0)
 
         self.spec = ThumbnailSpec(
             width=width,
@@ -50,6 +52,8 @@ class ThumbnailGenerator:
             title_font_size=title_size,
             subtitle_font_size=subtitle_size,
             overlay_rgba=overlay,
+            top_band_ratio=ratio,
+            gap=gap,
         )
 
         self.thumbnail_directory = _resolve_path(output_cfg.get("thumbnail_directory"))
@@ -82,7 +86,10 @@ class ThumbnailGenerator:
         output_path = self.thumbnail_directory / output_name
 
         canvas = Image.new("RGB", (self.spec.width, self.spec.height), "#000000")
-        top_band_height = max(int(self.spec.height * self.spec.top_band_ratio), self.spec.title_font_size * 2)
+        top_band_height = max(
+            int(self.spec.height * self.spec.top_band_ratio),
+            int(self.spec.title_font_size * 1.6),
+        )
         top_band = Image.new("RGB", (self.spec.width, top_band_height), "#000000")
         canvas.paste(top_band, (0, 0))
 
@@ -339,3 +346,23 @@ def _resolve_font(primary: object | None, *, fallback: str) -> Path:
         if resolved.exists():
             return resolved
     raise FileNotFoundError(f"Font file not found. Tried: {candidate_list}")
+
+
+def _parse_ratio(value: object | None, *, default: float) -> float:
+    try:
+        if value is None:
+            raise ValueError
+        ratio = float(value)
+    except (TypeError, ValueError):
+        ratio = default
+    return max(0.15, min(ratio, 0.5))
+
+
+def _parse_int(value: object | None, *, default: int, minimum: int = 0) -> int:
+    try:
+        if value is None:
+            raise ValueError
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, parsed)

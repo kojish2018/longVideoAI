@@ -88,7 +88,7 @@ class VideoGenerator:
             body_font_size=int(text_cfg.get("default_size", 36)),
             body_color=_hex_to_rgb(colors.get("default", "#FFFFFF")),
             accent_color=_hex_to_rgb(colors.get("highlight", "#FF4B2B")),
-            band_color=_hex_to_rgba(colors.get("background_box", "#000000B0")),
+            band_color=_hex_to_rgba(colors.get("background_box", "#000000F0")),
             title_font_size=int(config.get("thumbnail", {}).get("title_font_size", 72))
             if isinstance(config, dict)
             else 72,
@@ -259,21 +259,52 @@ class VideoGenerator:
         if cache_key in self._overlay_cache:
             return self._overlay_cache[cache_key]
 
-        band_height = int(self.render_cfg.height * 0.28)
+        font = self._get_font(int(self.render_cfg.body_font_size * 1.05))
+        multi_line = len(segment.lines) > 1
+        line_spacing = int(font.size * (0.42 if multi_line else 0.25))
+
+        text_sizes = [self._measure_text(font, line) for line in segment.lines]
+        text_block_height = sum(size[1] for size in text_sizes)
+        if multi_line:
+            text_block_height += line_spacing * (len(segment.lines) - 1)
+
+        outer_margin_top = max(int(font.size * 0.12), 6)
+        outer_margin_bottom = max(int(font.size * 0.35), 18)
+        inner_padding_top = max(int(font.size * 0.45), 20)
+        inner_padding_bottom = max(int(font.size * 0.7), 28)
+
+        band_height = (
+            text_block_height
+            + inner_padding_top
+            + inner_padding_bottom
+            + outer_margin_top
+            + outer_margin_bottom
+        )
         image = Image.new("RGBA", (self.render_cfg.width, band_height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image, "RGBA")
-        draw.rectangle([(0, 0), (self.render_cfg.width, band_height)], fill=self.render_cfg.band_color)
 
-        font = self._get_font(self.render_cfg.body_font_size)
-        line_spacing = int(font.size * 1.2)
-        margin_y = int(band_height * 0.13)
+        horizontal_margin = max(int(self.render_cfg.width * 0.018), 18)
+        radius = max(int(font.size * 0.42), 18)
+        rect_top = outer_margin_top
+        rect_bottom = band_height - outer_margin_bottom
+        rect = [
+            (horizontal_margin, rect_top),
+            (self.render_cfg.width - horizontal_margin, rect_bottom),
+        ]
+        draw.rounded_rectangle(rect, radius=radius, fill=self.render_cfg.band_color)
 
-        y = margin_y
-        for line in segment.lines:
-            text_width, text_height = self._measure_text(font, line)
-            x = max(0, int((self.render_cfg.width - text_width) / 2))
+        inner_top = rect_top + inner_padding_top
+        inner_bottom = rect_bottom - inner_padding_bottom
+        available_inner = max(inner_bottom - inner_top, 0)
+        y = inner_top + max((available_inner - text_block_height) // 2, 0)
+        content_width = self.render_cfg.width - (horizontal_margin * 2)
+
+        for idx, (line, (text_width, text_height)) in enumerate(zip(segment.lines, text_sizes)):
+            x = horizontal_margin + max(int((content_width - text_width) / 2), 0)
             draw.text((x, y), line, font=font, fill=self.render_cfg.body_color)
-            y += line_spacing
+            y += text_height
+            if idx < len(segment.lines) - 1:
+                y += line_spacing
 
         overlay_dir = run_dir / "overlays"
         overlay_dir.mkdir(parents=True, exist_ok=True)
