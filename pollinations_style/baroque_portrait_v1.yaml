@@ -1,0 +1,26 @@
+name: baroque_portrait_v1
+description: |
+  Fixed Baroque portrait style used before v2 update.
+  Template structure is unchanged; constants enforce 17th-century oil portrait look.
+
+template: |
+  {subject}
+  | {style} | {mood} |
+  | {lighting} | {camera}
+
+constants:
+  style: Baroque court portrait, 17th-century European oil-on-canvas; painterly texture; period attire with ruff collar, velvet and brocade, lace and pearls; subtle impasto, canvas grain, fine brushwork; influences of Rembrandt, Caravaggio, Velázquez
+  mood: dignified, introspective, solemn, noble presence
+  lighting: dramatic chiaroscuro and tenebrism; candlelit warm highlights; deep velvety shadows; soft falloff; gentle edge light on hair and ruff
+  camera: three-quarter view, half-length composition; subject centered; dark neutral backdrop with subtle vignette; portrait framing; balanced 16:9 look; avoid modern clothing, logos, neon, sci-fi, anime, 3D render, plastic skin, over-sharp HDR, lens flare, text, watermark, signature, extra fingers, disfigured anatomy
+
+fallback_default_image_prompt: >-
+  Baroque portrait, 17th-century oil-on-canvas, dramatic chiaroscuro and tenebrism,
+  candlelit warm highlights, deep velvety shadows, three-quarter view, half-length,
+  dark neutral backdrop with vignette, ruff collar, velvet and brocade, pearls,
+  subtle impasto, canvas grain, fine brushwork; dignified, introspective mood
+
+meta:
+  pollinations_model: flux
+  width: 1280
+  height: 720

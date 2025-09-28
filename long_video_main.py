@@ -64,7 +64,56 @@ def _maybe_upload_to_youtube(
         return None
 
     title = _extract_title_from_result(result, document)
-    description = _build_description(config, title, result)
+    # 説明欄はタイトル + ハッシュタグ列（視聴者に見える #付き）
+    hashtags = [
+        "#心理学",
+        "#行動心理学",
+        "#引き寄せの法則",
+        "#哲学",
+        "#ビジネス心理学",
+        "#成功哲学",
+        "#自己実現",
+        "#目標達成",
+        "#習慣化",
+        "#継続力",
+        "#自己成長",
+        "#成功法則",
+        "#システム思考",
+        "#習慣の力",
+        "#自己啓発",
+        "#モチベーション",
+        "#やり抜く力",
+        "#グリット",
+        "#人生を変える",
+        "#努力の仕組み",
+        "#成功哲学",
+    ]
+    description = f"{title}\n\n" + " ".join(hashtags)
+
+    # APIのtags（#なしのキーワード）
+    fixed_tags = [
+        "心理学",
+        "行動心理学",
+        "引き寄せの法則",
+        "哲学",
+        "ビジネス心理学",
+        "成功哲学",
+        "自己実現",
+        "目標達成",
+        "習慣化",
+        "継続力",
+        "自己成長",
+        "成功法則",
+        "システム思考",
+        "習慣の力",
+        "自己啓発",
+        "モチベーション",
+        "やり抜く力",
+        "グリット",
+        "人生を変える",
+        "努力の仕組み",
+        "成功哲学",
+    ]
 
     thumbnail_path = result.thumbnail_path
     if thumbnail_path is None:
@@ -77,6 +126,7 @@ def _maybe_upload_to_youtube(
         video_path=result.video_path,
         title=title,
         description=description,
+        tags=fixed_tags,
         publish_at=publish_at,
         thumbnail_path=thumbnail_path,
     )
@@ -297,16 +347,66 @@ def _maybe_upload_to_youtube(
         return None
 
     title = _extract_title_from_result(result, document)
-    description = _build_description(config, title, result)
+    # 説明欄はタイトル + ハッシュタグ列（視聴者に見える #付き）に固定
+    hashtags = [
+        "#心理学",
+        "#行動心理学",
+        "#引き寄せの法則",
+        "#哲学",
+        "#ビジネス心理学",
+        "#成功哲学",
+        "#自己実現",
+        "#目標達成",
+        "#習慣化",
+        "#継続力",
+        "#自己成長",
+        "#成功法則",
+        "#システム思考",
+        "#習慣の力",
+        "#自己啓発",
+        "#モチベーション",
+        "#やり抜く力",
+        "#グリット",
+        "#人生を変える",
+        "#努力の仕組み",
+        "#成功哲学",
+    ]
+    description = f"{title}\n\n" + " ".join(hashtags)
 
     thumbnail_path = result.thumbnail_path
     if thumbnail_path is None:
         logger.warning("生成されたサムネイルが見つかりませんでした。サムネイル設定をスキップします。")
 
+    # API の tags は # なしのキーワードを使用
+    fixed_tags = [
+        "心理学",
+        "行動心理学",
+        "引き寄せの法則",
+        "哲学",
+        "ビジネス心理学",
+        "成功哲学",
+        "自己実現",
+        "目標達成",
+        "習慣化",
+        "継続力",
+        "自己成長",
+        "成功法則",
+        "システム思考",
+        "習慣の力",
+        "自己啓発",
+        "モチベーション",
+        "やり抜く力",
+        "グリット",
+        "人生を変える",
+        "努力の仕組み",
+        "成功哲学",
+    ]
+
     video_id = uploader.upload(
         video_path=result.video_path,
         title=title,
         description=description,
+        tags=fixed_tags,
         publish_at=publish_at,
         thumbnail_path=thumbnail_path,
     )

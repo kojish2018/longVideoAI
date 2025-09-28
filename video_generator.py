@@ -39,6 +39,7 @@ class RenderConfig:
     accent_color: Tuple[int, int, int]
     band_color: Tuple[int, int, int, int]
     title_font_size: int
+    opening_title_font_size: int
 
 
 @dataclass
@@ -70,6 +71,11 @@ class VideoGenerator:
 
         colors = text_cfg.get("colors", {}) if isinstance(text_cfg, dict) else {}
 
+        # Resolve sizes
+        thumb_title_size = int(config.get("thumbnail", {}).get("title_font_size", 72)) if isinstance(config, dict) else 72
+        # 開幕シーンは固定で小さめのサイズを使用（要望により固定値）
+        opening_title_size = 70
+
         self.render_cfg = RenderConfig(
             width=int(video_cfg.get("width", 1280)),
             height=int(video_cfg.get("height", 720)),
@@ -89,9 +95,8 @@ class VideoGenerator:
             body_color=_hex_to_rgb(colors.get("default", "#FFFFFF")),
             accent_color=_hex_to_rgb(colors.get("highlight", "#FF4B2B")),
             band_color=_hex_to_rgba(colors.get("background_box", "#000000F0")),
-            title_font_size=int(config.get("thumbnail", {}).get("title_font_size", 72))
-            if isinstance(config, dict)
-            else 72,
+            title_font_size=thumb_title_size,
+            opening_title_font_size=opening_title_size,
         )
 
         self._font_cache: Dict[Tuple[int, bool], ImageFont.FreeTypeFont] = {}
@@ -325,7 +330,7 @@ class VideoGenerator:
 
         image = Image.new("RGBA", (self.render_cfg.width, self.render_cfg.height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
-        font = self._get_font(self.render_cfg.title_font_size, bold=True)
+        font = self._get_font(self.render_cfg.opening_title_font_size, bold=True)
 
         total_height = 0
         for line in lines:
