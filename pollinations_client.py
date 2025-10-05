@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import random
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlencode, quote
@@ -21,6 +23,9 @@ class PollinationsClient:
         self.model = pollinations_cfg.get("model", "flux")
         self.width = pollinations_cfg.get("width", 1920)
         self.height = pollinations_cfg.get("height", 1080)
+        # Retry settings (optional)
+        self.retries = int(pollinations_cfg.get("retries", 3))
+        self.retry_backoff_base = float(pollinations_cfg.get("retry_backoff_base", 1.0))
 
     def fetch(self, prompt: str, output_path: Path) -> Optional[Path]:
         if not prompt.strip():
@@ -33,22 +38,46 @@ class PollinationsClient:
             "height": self.height,
         }
         query = urlencode(params)
-        encoded_prompt = quote(prompt)
+        # Encode all reserved chars including '/'
+        encoded_prompt = quote(prompt, safe="")
         url = f"{self.BASE_URL}{encoded_prompt}?{query}"
 
         logger.info("Pollinations request: %s", prompt[:80])
         logger.debug("Pollinations URL: %s", url)
 
-        try:
-            if output_path.exists():
-                logger.info("Pollinations cache hit: %s", output_path.name)
-                return output_path
-
-            response = requests.get(url, timeout=120, allow_redirects=True)
-            response.raise_for_status()
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(response.content)
+        if output_path.exists():
+            logger.info("Pollinations cache hit: %s", output_path.name)
             return output_path
-        except requests.RequestException as exc:  # pragma: no cover - network
-            logger.error("Pollinations fetch failed: %s", exc)
-            return None
+
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                response = requests.get(url, timeout=120, allow_redirects=True)
+                # Retry on 429/5xx
+                status = response.status_code
+                if status == 404:
+                    # Likely bad prompt/path: don't retry
+                    response.raise_for_status()
+                if status in (429,) or 500 <= status < 600:
+                    raise requests.HTTPError(f"HTTP {status}")
+
+                response.raise_for_status()
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(response.content)
+                return output_path
+            except requests.RequestException as exc:  # pragma: no cover - network
+                if attempt > max(0, self.retries):
+                    logger.error("Pollinations fetch failed after %d attempts: %s", attempt - 1, exc)
+                    return None
+                # Backoff with jitter
+                wait = self.retry_backoff_base * (2 ** (attempt - 1))
+                wait *= random.uniform(0.8, 1.2)
+                logger.warning(
+                    "Pollinations request failed (attempt %d/%d): %s; retrying in %.2fs",
+                    attempt,
+                    self.retries,
+                    exc,
+                    wait,
+                )
+                time.sleep(max(0.1, min(wait, 10.0)))

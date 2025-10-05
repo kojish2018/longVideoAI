@@ -110,17 +110,9 @@ class ThumbnailGenerator:
             max_lines=3,
         )
 
+        # Ignore subtitle usage (center title only in the top band)
         subtitle_lines: Sequence[str] = []
         subtitle_font = None
-        if subtitle:
-            subtitle_font = ImageFont.truetype(str(self.subtitle_font_path), size=self.spec.subtitle_font_size)
-            subtitle_lines, subtitle_font = self._fit_text_lines(
-                subtitle,
-                subtitle_font,
-                self.subtitle_font_path,
-                max_width=self.spec.width - 120,
-                max_lines=2,
-            )
 
         self._draw_text_block(
             draw,
@@ -213,7 +205,7 @@ class ThumbnailGenerator:
         subtitle_font: Optional[ImageFont.FreeTypeFont],
         top_band_height: int,
     ) -> None:
-        padding_top = 36
+        padding_top = 0
         line_spacing = int(title_font.size * 0.3)
 
         block_height = sum(_measure_text(title_font, line)[1] for line in title_lines)
@@ -224,7 +216,7 @@ class ThumbnailGenerator:
             block_height += sum(_measure_text(subtitle_font, line)[1] for line in subtitle_lines)
             block_height += int(subtitle_font.size * 0.25) * (len(subtitle_lines) - 1)
 
-        y = max(padding_top, (top_band_height - block_height) // 2)
+        y = max(0, (top_band_height - block_height) // 2)
         for line in title_lines:
             w, h = _measure_text(title_font, line)
             draw.text(((self.spec.width - w) / 2, y), line, font=title_font, fill=(255, 255, 255))

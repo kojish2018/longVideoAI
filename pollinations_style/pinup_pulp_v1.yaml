@@ -1,0 +1,29 @@
+name: pinup_pulp_v1
+description: |
+  Fixed prompt for "oil painting, vintage pin-up art, 1950s pulp magazine cover"
+  with dramatic lighting and cinematic portrait. Aims for shocking, message-driven,
+  emotionally compelling imagery. Keeps existing template and 16:9 output.
+
+template: |
+  {subject}
+  | {style} | {mood} |
+  | {lighting} | {camera}
+
+constants:
+  style: oil painting, vintage pin-up art, mid-century illustration, 1950s pulp magazine cover aesthetic; hand-painted brushwork and subtle halftone grain; saturated mid-century color palette; cinematic portrait sensibility
+  mood: shocking, provocative, emotionally charged; bold, message-driven narrative; urgency and high stakes; rebellious yet tasteful (PG-13)
+  lighting: dramatic studio lighting with hard key and colored gels (red and teal); crisp deep shadows; specular highlights and rim light; controlled falloff
+  camera: poster-like composition with dynamic pose and diagonal tension; mid-shot or tight three-quarter; direct eye contact; bold framing within 16:9; rich film grain; avoid text, logos, watermarks, explicit nudity, gore, low-res, artifacts
+
+fallback_default_image_prompt: >-
+  oil painting, vintage pin-up art, 1950s pulp magazine cover aesthetic,
+  dramatic studio lighting, cinematic portrait; saturated mid-century colors,
+  bold poster-like composition, dynamic pose, direct eye contact;
+  emotionally charged, provocative, message-driven image; high contrast,
+  tasteful (PG-13); no text, no logos, no watermark
+
+meta:
+  pollinations_model: flux
+  width: 1280
+  height: 720
+  aspect_ratio: "16:9"

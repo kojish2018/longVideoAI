@@ -8,6 +8,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 from moviepy.audio.io.AudioFileClip import AudioFileClip
+from moviepy.audio.AudioClip import CompositeAudioClip
+import moviepy.audio.fx.all as afx
 from moviepy.editor import (
     ColorClip,
     CompositeVideoClip,
@@ -122,6 +124,38 @@ class VideoGenerator:
                 raise RuntimeError("No clips generated for rendering")
 
             final_clip = concatenate_videoclips(clips, method="compose")
+
+            # --------------------------------------------------------------
+            # Mix narration (existing) with background music looped/cut to fit
+            # Requested track: background_music/Fulero.mp3
+            # Behavior: if music is shorter => loop; if longer => cut
+            # Volume: small (focus on narration) with gentle fade in/out
+            # --------------------------------------------------------------
+            try:
+                bgm_path = Path("background_music/Fulero.mp3")
+                if bgm_path.exists() and final_clip.audio is not None:
+                    narration = final_clip.audio
+                    bgm = AudioFileClip(str(bgm_path))
+                    bgm = afx.audio_loop(bgm, duration=final_clip.duration)
+                    # Reduce BGM level (approx -18 dB)
+                    bgm = bgm.volumex(0.12)
+                    bgm = afx.audio_fadein(bgm, 0.5)
+                    bgm = afx.audio_fadeout(bgm, 1.0)
+                    mixed = CompositeAudioClip([narration, bgm]).set_duration(final_clip.duration)
+                    # Ensure FPS is set for normalization (CompositeAudioClip may miss fps)
+                    mixed = mixed.set_fps(self.render_cfg.audio_sample_rate)
+                    # Normalize combined audio to prevent clipping, then keep ~-1 dB headroom
+                    try:
+                        normalized = afx.audio_normalize(mixed)
+                        normalized = normalized.volumex(0.89)
+                        final_clip = final_clip.set_audio(normalized)
+                    except Exception as exc_norm:  # pragma: no cover - safety net
+                        logger.exception("Audio normalize failed, using unnormalized mix: %s", exc_norm)
+                        final_clip = final_clip.set_audio(mixed)
+                elif not bgm_path.exists():
+                    logger.warning("BGM file not found: %s", bgm_path)
+            except Exception as exc:  # pragma: no cover - safeguard audio pipeline
+                logger.exception("Failed to mix BGM: %s", exc)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             temp_audio = run_dir / "temp_audio.m4a"
 
@@ -173,11 +207,27 @@ class VideoGenerator:
         else:
             visual_clip = self._build_content_clip(run_dir, scene)
 
-        audio_clip = AudioFileClip(str(scene.narration_path)).set_duration(scene.duration)
+        audio_clip = AudioFileClip(str(scene.narration_path))
+        audio_duration = audio_clip.duration
+
+        target_duration = scene.duration
+        if audio_duration is not None and audio_duration > 0:
+            if target_duration > 0:
+                target_duration = min(target_duration, audio_duration)
+            else:
+                target_duration = audio_duration
+
+        if target_duration <= 0:
+            target_duration = audio_duration if audio_duration and audio_duration > 0 else scene.duration
+        if target_duration <= 0:
+            target_duration = 0.01
+
+        audio_clip = audio_clip.subclip(0, target_duration)
+        visual_clip = visual_clip.set_duration(target_duration)
         composite = CompositeVideoClip(
             [visual_clip], size=(self.render_cfg.width, self.render_cfg.height)
         )
-        composite = composite.set_duration(scene.duration).set_audio(audio_clip)
+        composite = composite.set_duration(target_duration).set_audio(audio_clip)
         return composite
 
     def _build_opening_clip(

@@ -1,0 +1,30 @@
+name: baroque_portrait_v2
+description: |
+  Current fixed Baroque portrait style (v2): emphasizes opulent interior
+  background and full/three-quarter length while keeping the existing
+  template structure and 16:9 output.
+
+template: |
+  {subject}
+  | {style} | {mood} |
+  | {lighting} | {camera}
+
+constants:
+  style: Baroque court portrait, 17th-century European oil-on-canvas; painterly texture; period attire with ruff collar, velvet and brocade, lace and pearls; subtle impasto, canvas grain, fine brushwork; opulent interior details with marble columns, heavy drapery, carved wood and tapestries; influences of Rembrandt, Caravaggio, Velázquez
+  mood: dignified, introspective, solemn, noble presence; quiet grandeur
+  lighting: dramatic chiaroscuro and tenebrism; candlelit warm highlights; deep velvety shadows; soft falloff; gentle edge light on hair and ruff; low ambient fill
+  camera: full-length or three-quarter length portrait; standing pose with hands visible; include environmental background elements (columns, drapery, carved wood, tapestries, table with props); subject centered; grounded stance; portrait framing within a balanced 16:9 composition; avoid modern clothing, logos, neon, sci-fi, anime, 3D render, plastic skin, over-sharp HDR, lens flare, text, watermark, signature, extra fingers, disfigured anatomy
+
+fallback_default_image_prompt: >-
+  Baroque portrait in opulent interior, 17th-century oil-on-canvas, dramatic
+  chiaroscuro and tenebrism, candlelit warm highlights, deep velvety shadows,
+  full-length or three-quarter length, dignified standing pose, dark neutral
+  backdrop enriched with columns, heavy drapery and carved wood, ruff collar,
+  velvet and brocade, pearls, subtle impasto, canvas grain, fine brushwork;
+  noble, introspective mood
+
+meta:
+  pollinations_model: flux
+  width: 1280
+  height: 720
+  aspect_ratio: "16:9"

@@ -123,6 +123,14 @@ class VoicevoxClient:
             audio_query["outputSamplingRate"] = self.output_sampling_rate
         if self.output_stereo is not None:
             audio_query["outputStereo"] = self.output_stereo
+
+        # Globally shorten pauses between phonemes/sentences to reduce awkward gaps
+        try:
+            audio_query["prePhonemeLength"] = 0.06
+            audio_query["postPhonemeLength"] = 0.06
+        except Exception:
+            # Be defensive: if schema changes, don't fail synthesis
+            pass
         return audio_query
 
     def _synthesize_audio(self, audio_query: Dict[str, Any], output_path: Path) -> None:

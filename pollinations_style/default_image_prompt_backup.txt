@@ -1,0 +1,4 @@
+# Backup of the previous default Pollinations fixed prompt
+# Stored before updating the active prompt configuration
+
+oil painting, mid-century poster illustration, 1950s pulp drama cover, 16:9 framing; fully clothed; no text, no logos, no watermark

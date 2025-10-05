@@ -1,5 +1,5 @@
 # Local credentials (never commit real secrets)
-credentials/*.json
+credentials/
 config.yaml
 
 repo_clone/
@@ -14,6 +14,8 @@ data/
 output/
 logs/
 temp/
+default_img/
+longscripts_txt/
 
 sample_txt/
 visual_img/
