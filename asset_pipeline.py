@@ -259,11 +259,13 @@ class AssetPipeline:
             self._image_cache[scene_id] = existing
             return existing
 
-        # Fallback: choose a default image if available
-        default_dir = self.run_dir.parent / "default_img"
+        # Fallback: choose a default image from project root if available
+        project_root = self.run_dir.parent.parent
+        default_dir = project_root / "default_img"
         candidates: List[Path] = []
-        for pattern in ("*.png", "*.PNG", "*.jpg", "*.jpeg", "*.JPG", "*.JPEG"):
-            candidates.extend((default_dir.glob(pattern)))
+        if default_dir.exists():
+            for pattern in ("*.png", "*.PNG", "*.jpg", "*.jpeg", "*.JPG", "*.JPEG"):
+                candidates.extend(default_dir.glob(pattern))
 
         if candidates:
             choice = random.choice(candidates)

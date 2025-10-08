@@ -76,7 +76,7 @@ class VideoGenerator:
         # Resolve sizes
         thumb_title_size = int(config.get("thumbnail", {}).get("title_font_size", 72)) if isinstance(config, dict) else 72
         # 開幕シーンは固定で小さめのサイズを使用（要望により固定値）
-        opening_title_size = 70
+        opening_title_size = 75
 
         self.render_cfg = RenderConfig(
             width=int(video_cfg.get("width", 1280)),
@@ -314,7 +314,7 @@ class VideoGenerator:
         if cache_key in self._overlay_cache:
             return self._overlay_cache[cache_key]
 
-        font = self._get_font(int(self.render_cfg.body_font_size * 1.05))
+        font = self._get_font(self.render_cfg.body_font_size)
         multi_line = len(segment.lines) > 1
         line_spacing = int(font.size * (0.42 if multi_line else 0.25))
 

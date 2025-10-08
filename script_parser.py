@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from logging_utils import get_logger
 
@@ -38,6 +38,8 @@ class ScriptSection:
 class ScriptDocument:
     thumbnail_title: str
     sections: List[ScriptSection]
+    tags: Optional[List[str]] = None
+    description: Optional[str] = None
 
     def total_word_count(self) -> int:
         return sum(section.word_count for section in self.sections)
@@ -55,14 +57,61 @@ def parse_script(path: Path | str) -> ScriptDocument:
 
     lines = raw_text.splitlines()
     thumbnail_title = ""
-    body_lines: List[str] = []
+    tags: Optional[List[str]] = None
+    description: Optional[str] = None
+    body_start_index = 0
 
-    # Extract thumbnail title if the first line follows s"title" format
-    if lines and lines[0].startswith('s"') and lines[0].endswith('"'):
-        thumbnail_title = lines[0][2:-1].strip()
-        body_lines = lines[1:]
-    else:
-        body_lines = lines
+    # Extract metadata lines (s"...", tags"...", description"...") at the top
+    def _consume_block(prefix: str) -> str:
+        nonlocal body_start_index
+        line = lines[body_start_index]
+        body_start_index += 1
+
+        content: list[str] = []
+        remainder = line[len(prefix):]
+        if remainder.endswith('"'):
+            content.append(remainder[:-1])
+            return "\n".join(content)
+
+        content.append(remainder)
+        while body_start_index < len(lines):
+            current = lines[body_start_index]
+            body_start_index += 1
+            if current.rstrip().endswith('"'):
+                content.append(current[: current.rfind('"')])
+                break
+            content.append(current)
+        return "\n".join(content)
+
+
+    while body_start_index < len(lines):
+        raw_line = lines[body_start_index]
+        line = raw_line.strip()
+        if not line:
+            body_start_index += 1
+            continue
+
+        if line.startswith('s"'):
+            content = _consume_block('s"')
+            thumbnail_title = content.strip()
+            continue
+
+        if line.startswith('tags"'):
+            raw_tags = _consume_block('tags"')
+            if raw_tags:
+                normalized = raw_tags.replace('\n', ',')
+                tags = [tag.strip() for tag in normalized.split(',') if tag.strip()]
+            continue
+
+        if line.startswith('description"'):
+            raw_description = _consume_block('description"')
+            description = raw_description.strip()
+            continue
+
+        break
+
+    body_lines = lines[body_start_index:]
+    if not thumbnail_title:
         logger.warning("Thumbnail title line (s\"...\") not found; using fallback title")
 
     # Split sections by blank line
@@ -92,4 +141,9 @@ def parse_script(path: Path | str) -> ScriptDocument:
             )
         )
     logger.info("Parsed script into %d sections (thumbnail: %s)", len(sections), thumbnail_title or "N/A")
-    return ScriptDocument(thumbnail_title=thumbnail_title, sections=sections)
+    return ScriptDocument(
+        thumbnail_title=thumbnail_title,
+        sections=sections,
+        tags=tags,
+        description=description,
+    )

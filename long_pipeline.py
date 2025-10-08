@@ -205,6 +205,8 @@ class LongFormPipeline:
             "video_path": str(result.video_path.relative_to(result.output_dir)),
             "thumbnail_path": str(result.thumbnail_path) if result.thumbnail_path else None,
             "scenes": [asdict(scene_output) for scene_output in result.scenes],
+            "script_tags": document.tags,
+            "script_description": document.description,
             "notes": {
                 "description": "Generated with MoviePy. Replace assets or re-render as needed.",
             },

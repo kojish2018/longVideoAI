@@ -6,7 +6,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from config_loader import AppConfig, load_config
 from logging_utils import configure_logging, get_logger
@@ -15,6 +15,9 @@ from script_parser import ScriptDocument, parse_script
 from youtube_uploader import YouTubeUploader
 
 logger = get_logger(__name__)
+
+
+VOICE_CREDIT_LINE = "VOICEVOX: 青山龍星"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,22 +67,12 @@ def _maybe_upload_to_youtube(
         return None
 
     title = _extract_title_from_result(result, document)
-    # 説明欄はタイトル + ハッシュタグ列（視聴者に見える #付き）
-    hashtags = [
-        "#移民政策",
-        "#外国人労働者",
-        "#治安",
-        "#日本保守党",
-    ]
-    description = f"{title}\n\n" + " ".join(hashtags) + "\n\nVOICEVOX: 青山龍星"
-
-    # APIのtags（#なしのキーワード）
-    fixed_tags = [
-        "移民政策",
-        "外国人労働者",
-        "治安",
-        "日本保守党",
-    ]
+    description, youtube_tags = _prepare_description_and_tags(
+        config=config,
+        document=document,
+        result=result,
+        title=title,
+    )
 
     thumbnail_path = result.thumbnail_path
     if thumbnail_path is None:
@@ -92,7 +85,7 @@ def _maybe_upload_to_youtube(
         video_path=result.video_path,
         title=title,
         description=description,
-        tags=fixed_tags,
+        tags=youtube_tags,
         publish_at=publish_at,
         thumbnail_path=thumbnail_path,
     )
@@ -102,6 +95,43 @@ def _maybe_upload_to_youtube(
     else:
         logger.error("YouTube へのアップロードに失敗しました。")
     return video_id
+
+
+def _prepare_description_and_tags(
+    *,
+    config: AppConfig,
+    document: ScriptDocument,
+    result: PipelineResult,
+    title: str,
+) -> tuple[str, List[str]]:
+    """Compose YouTube description and tags from script metadata with fallbacks."""
+
+    script_tags = []
+    if document.tags:
+        for tag in document.tags:
+            cleaned = tag.strip().lstrip('#')
+            if cleaned:
+                script_tags.append(cleaned)
+
+    youtube_tags = script_tags
+
+    script_description = (document.description or '').strip()
+    if script_description:
+        base_description = script_description
+    else:
+        base_description = _build_description(config, title, result)
+
+    sections: List[str] = [base_description]
+    if youtube_tags:
+        hashtag_line = " ".join(f"#{tag}" for tag in youtube_tags)
+        if hashtag_line:
+            sections.append(hashtag_line)
+
+    if VOICE_CREDIT_LINE not in base_description:
+        sections.append(VOICE_CREDIT_LINE)
+
+    description = "\n\n".join(part for part in sections if part)
+    return description, youtube_tags
 
 
 def _extract_title_from_result(
@@ -135,11 +165,7 @@ def _build_description(
     youtube_cfg = config.raw.get("youtube", {}) if isinstance(config.raw, dict) else {}
     duration_minutes = int(result.total_duration // 60)
     duration_seconds = int(result.total_duration % 60)
-    base_description = (
-        f"{title}\n"
-        f"総再生時間: 約{duration_minutes}分{duration_seconds:02d}秒\n"
-        "本動画は LongVideoAI によって自動生成されました。"
-    )
+    base_description = title
 
     template = youtube_cfg.get("description_template")
     if not template:
@@ -296,105 +322,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-def _maybe_upload_to_youtube(
-    *,
-    config,
-    document,
-    result,
-    publish_at: Optional[str],
-) -> Optional[str]:
-    """Render 結果を元に YouTube アップロードを実行する。"""
-
-    uploader = YouTubeUploader(config=config.raw, credentials_dir=config.credentials_dir)
-    if not uploader.authenticate():
-        logger.error("YouTube 認証に失敗したためアップロードをスキップします。")
-        return None
-
-    title = _extract_title_from_result(result, document)
-    # 説明欄はタイトル + ハッシュタグ列（視聴者に見える #付き）に固定
-    hashtags = [
-        "#移民政策",
-        "#外国人労働者",
-        "#治安",
-        "#日本保守党",
-    ]
-    description = f"{title}\n\n" + " ".join(hashtags) + "\n\nVOICEVOX: 青山龍星"
-
-    thumbnail_path = result.thumbnail_path
-    if thumbnail_path is None:
-        logger.warning("生成されたサムネイルが見つかりませんでした。サムネイル設定をスキップします。")
-
-    # API の tags は # なしのキーワードを使用
-    fixed_tags = [
-        "移民政策",
-        "外国人労働者",
-        "治安",
-        "日本保守党",
-    ]
-
-    video_id = uploader.upload(
-        video_path=result.video_path,
-        title=title,
-        description=description,
-        tags=fixed_tags,
-        publish_at=publish_at,
-        thumbnail_path=thumbnail_path,
-    )
-
-    if video_id:
-        logger.info("YouTube へのアップロードが完了しました: https://www.youtube.com/watch?v=%s", video_id)
-    else:
-        logger.error("YouTube へのアップロードに失敗しました。")
-    return video_id
-
-
-def _extract_title_from_result(result, document) -> str:
-    """最初の字幕テキストを抽出しタイトルとして返す。"""
-
-    for scene in result.scenes:
-        for segment in scene.text_segments:
-            caption = " ".join(line.strip() for line in segment.lines if line.strip())
-            if caption:
-                return caption[:100]
-
-    if document.sections:
-        for line in document.sections[0].lines:
-            line = line.strip()
-            if line:
-                return line[:100]
-
-    if document.thumbnail_title:
-        return document.thumbnail_title[:100]
-
-    return "AI Generated Video"
-
-
-def _build_description(config, title: str, result) -> str:
-    """設定テンプレートを用いて説明文を組み立てる。"""
-
-    youtube_cfg = config.raw.get("youtube", {}) if isinstance(config.raw, dict) else {}
-    duration_minutes = int(result.total_duration // 60)
-    duration_seconds = int(result.total_duration % 60)
-    base_description = (
-        f"{title}\n"
-        f"総再生時間: 約{duration_minutes}分{duration_seconds:02d}秒\n"
-        "本動画は LongVideoAI によって自動生成されました。"
-    )
-
-    template = youtube_cfg.get("description_template")
-    if not template:
-        return base_description
-
-    try:
-        rendered = template.format(
-            title=title,
-            description=base_description,
-            duration_seconds=int(result.total_duration),
-        )
-    except KeyError as exc:
-        logger.warning("description_template の展開に必要なキーが不足しています: %s", exc)
-        return template
-
-    return rendered.strip() or base_description
