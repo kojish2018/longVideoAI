@@ -71,7 +71,7 @@ def _maybe_upload_to_youtube(
         "#治安",
         "#日本保守党",
     ]
-    description = f"{title}\n\n" + " ".join(hashtags)
+    description = f"{title}\n\n" + " ".join(hashtags) + "\n\nVOICEVOX: 青山龍星"
 
     # APIのtags（#なしのキーワード）
     fixed_tags = [
@@ -320,7 +320,7 @@ def _maybe_upload_to_youtube(
         "#治安",
         "#日本保守党",
     ]
-    description = f"{title}\n\n" + " ".join(hashtags)
+    description = f"{title}\n\n" + " ".join(hashtags) + "\n\nVOICEVOX: 青山龍星"
 
     thumbnail_path = result.thumbnail_path
     if thumbnail_path is None:
