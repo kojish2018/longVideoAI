@@ -1,0 +1,2 @@
+# Current fixed Pollinations prompt from config.simple_mode.default_image_prompt
+satirical cartoon
