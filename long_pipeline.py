@@ -14,6 +14,7 @@ from script_parser import ScriptDocument
 from timeline_builder import Scene, TimelineBuilder, TimelinePlan
 from thumbnail_generator import ThumbnailGenerator
 from video_generator import ScenePlan, TextSegmentPlan, VideoGenerator
+from renderer_factory import make_renderer
 
 logger = get_logger(__name__)
 
@@ -85,7 +86,8 @@ class LongFormPipeline:
 
         total_duration = round(current_start, 2)
 
-        video_generator = VideoGenerator(self.config.raw)
+        # Select renderer by config (moviepy default, ffmpeg supported)
+        video_generator = make_renderer(self.config.raw)
         video_output_path = run_dir / f"{run_id}.mp4"
         scene_plans = self._build_scene_plans(run_dir, scenes_output)
         video_generator.render(
