@@ -26,6 +26,10 @@ class PollinationsClient:
         # Retry settings (optional)
         self.retries = int(pollinations_cfg.get("retries", 3))
         self.retry_backoff_base = float(pollinations_cfg.get("retry_backoff_base", 1.0))
+        # Timeouts (seconds). If not provided, use fast-fail defaults.
+        # requests.get accepts a (connect, read) tuple.
+        self.timeout_connect = float(pollinations_cfg.get("timeout_connect", 5))
+        self.timeout_read = float(pollinations_cfg.get("timeout_read", 45))
 
     def fetch(self, prompt: str, output_path: Path) -> Optional[Path]:
         if not prompt.strip():
@@ -53,9 +57,16 @@ class PollinationsClient:
         while True:
             attempt += 1
             try:
-                response = requests.get(url, timeout=120, allow_redirects=True)
+                start = time.monotonic()
+                response = requests.get(
+                    url,
+                    timeout=(self.timeout_connect, self.timeout_read),
+                    allow_redirects=True,
+                )
                 # Retry on 429/5xx
                 status = response.status_code
+                elapsed = time.monotonic() - start
+                logger.info("Pollinations response: status=%s elapsed=%.2fs", status, elapsed)
                 if status == 404:
                     # Likely bad prompt/path: don't retry
                     response.raise_for_status()

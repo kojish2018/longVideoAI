@@ -39,6 +39,7 @@ class Scene:
     chunks: List[SceneChunk]
     image_prompt: Optional[str]
     bgm_track_id: Optional[str]
+    primary_prompt: Optional[str] = None
 
 
 @dataclass
@@ -98,6 +99,7 @@ class TimelineBuilder:
         # Opening
         opening_section = document.sections[0]
         opening_chunk = self._build_chunk(opening_section, SceneType.OPENING)
+        opening_primary_prompt = self._extract_focus_text([opening_chunk])
         opening_scene = Scene(
             scene_id="S001",
             scene_type=SceneType.OPENING,
@@ -113,6 +115,7 @@ class TimelineBuilder:
         scene_counter = 2
         group_chunks: List[SceneChunk] = []
         group_duration = 0.0
+        first_content_pending = True
 
         for section in document.sections[1:]:
             chunk = self._build_chunk(section, SceneType.CONTENT)
@@ -123,11 +126,18 @@ class TimelineBuilder:
                 continue
 
             if self.max_chunks_per_scene and len(group_chunks) >= self.max_chunks_per_scene:
+                primary_prompt = (
+                    opening_primary_prompt if first_content_pending else None
+                )
                 scenes.append(
                     self._finalize_content_scene(
-                        scene_counter, current_start, group_chunks
+                        scene_counter,
+                        current_start,
+                        group_chunks,
+                        primary_prompt=primary_prompt,
                     )
                 )
+                first_content_pending = False
                 current_start += group_duration
                 scene_counter += 1
                 group_chunks = [chunk]
@@ -144,11 +154,18 @@ class TimelineBuilder:
             )
 
             if should_close:
+                primary_prompt = (
+                    opening_primary_prompt if first_content_pending else None
+                )
                 scenes.append(
                     self._finalize_content_scene(
-                        scene_counter, current_start, group_chunks
+                        scene_counter,
+                        current_start,
+                        group_chunks,
+                        primary_prompt=primary_prompt,
                     )
                 )
+                first_content_pending = False
                 current_start += group_duration
                 scene_counter += 1
                 group_chunks = [chunk]
@@ -158,9 +175,18 @@ class TimelineBuilder:
                 group_duration = proposed_duration
 
         if group_chunks:
-            scenes.append(
-                self._finalize_content_scene(scene_counter, current_start, group_chunks)
+            primary_prompt = (
+                opening_primary_prompt if first_content_pending else None
             )
+            scenes.append(
+                self._finalize_content_scene(
+                    scene_counter,
+                    current_start,
+                    group_chunks,
+                    primary_prompt=primary_prompt,
+                )
+            )
+            first_content_pending = False
             current_start += group_duration
 
         logger.info(
@@ -185,6 +211,8 @@ class TimelineBuilder:
         scene_number: int,
         start_time: float,
         chunks: List[SceneChunk],
+        *,
+        primary_prompt: Optional[str] = None,
     ) -> Scene:
         total_duration = sum(chunk.estimated_duration for chunk in chunks)
         scene_id = f"S{scene_number:03d}"
@@ -198,6 +226,7 @@ class TimelineBuilder:
             chunks=[chunk for chunk in chunks],
             image_prompt=focus_text,
             bgm_track_id=bgm_track,
+            primary_prompt=primary_prompt,
         )
 
     def _estimate_duration(self, section: ScriptSection, scene_type: SceneType) -> float:

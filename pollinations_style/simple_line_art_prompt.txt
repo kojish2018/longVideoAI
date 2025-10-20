@@ -1,0 +1,7 @@
+# Archived default image prompt (prior to hyper realistic switch)
+base_prompt: simple line art with vivid colors
+template: |
+  Primary subject: {subject}
+  {style}
+prompt_constants:
+  style: simple line art with vivid colors

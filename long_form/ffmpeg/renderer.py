@@ -278,7 +278,7 @@ class FFmpegVideoGenerator:
 
     def _mix_bgm(self, input_video: Path, output_path: Path, *, total_duration: float) -> Path:
         cfg = self.render_cfg
-        bgm_file = Path("background_music/Fulero.mp3")
+        bgm_file = Path("background_music/Vandals.mp3")
         if not bgm_file.exists():
             # Fast path: just move/copy streams with faststart
             args = ["-i", str(input_video), "-c", "copy", "-movflags", "+faststart", "-y", str(output_path)]
@@ -294,19 +294,20 @@ class FFmpegVideoGenerator:
             bgm_file,
             total_duration,
             fade_out_st,
-            0.10,
+            0.24,
             "on",
         )
         filter_complex = (
-            # Prepare BGM: low level, gentle fade, correct fade-out timing, force stereo @ sample rate
+            # Prepare BGM: EBU R128 normalize first, then reduce level, fade, and format
             f"[1:a]atrim=0:duration={total_duration:.3f},asetpts=PTS-STARTPTS,"
-            f"volume=0.10,afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out_st:.3f}:d=1.0,"
+            f"loudnorm=I=-30:LRA=7:TP=-2,"
+            f"volume=0.24,afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out_st:.3f}:d=1.0,"
             f"aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo[bgm];"
             # Prepare narration: force stereo @ sample rate
             f"[0:a]aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo[narr];"
             # Mix 2 inputs, duration=first keeps final length tied to video/narration
             f"[narr][bgm]amix=inputs=2:duration=first:dropout_transition=2[a];"
-            # Loudness normalization to -14 LUFS with -1.5 dBTP headroom
+            # Final loudness normalization for the whole program
             f"[a]loudnorm=I=-14:LRA=7:TP=-1.5,"
             f"aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo[aout]"
         )

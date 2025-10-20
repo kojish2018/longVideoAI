@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import logging
+import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 from moviepy.audio.io.AudioFileClip import AudioFileClip
-from moviepy.audio.AudioClip import CompositeAudioClip
+from moviepy.audio.AudioClip import AudioArrayClip, CompositeAudioClip
 import moviepy.audio.fx.all as afx
 from moviepy.editor import (
     ColorClip,
@@ -16,6 +17,7 @@ from moviepy.editor import (
     ImageClip,
     concatenate_videoclips,
 )
+import pyloudnorm as pyln
 
 logger = logging.getLogger(__name__)
 
@@ -127,18 +129,19 @@ class VideoGenerator:
 
             # --------------------------------------------------------------
             # Mix narration (existing) with background music looped/cut to fit
-            # Requested track: background_music/Fulero.mp3
+            # Requested track: background_music/Vandals.mp3
             # Behavior: if music is shorter => loop; if longer => cut
             # Volume: small (focus on narration) with gentle fade in/out
             # --------------------------------------------------------------
             try:
-                bgm_path = Path("background_music/Fulero.mp3")
+                bgm_path = Path("background_music/Vandals.mp3")
                 if bgm_path.exists() and final_clip.audio is not None:
                     narration = final_clip.audio
                     bgm = AudioFileClip(str(bgm_path))
+                    bgm = self._normalize_bgm_clip(bgm)
                     bgm = afx.audio_loop(bgm, duration=final_clip.duration)
-                    # Reduce BGM level (approx -18 dB)
-                    bgm = bgm.volumex(0.12)
+                    # Reduce BGM level (approx -22 dB)
+                    bgm = bgm.volumex(0.08)
                     bgm = afx.audio_fadein(bgm, 0.5)
                     bgm = afx.audio_fadeout(bgm, 1.0)
                     mixed = CompositeAudioClip([narration, bgm]).set_duration(final_clip.duration)
@@ -195,6 +198,38 @@ class VideoGenerator:
     # ------------------------------------------------------------------
     # Scene builders
     # ------------------------------------------------------------------
+
+    def _normalize_bgm_clip(self, clip: AudioFileClip) -> AudioFileClip:
+        sample_rate = self.render_cfg.audio_sample_rate
+        try:
+            array = clip.to_soundarray(fps=sample_rate)
+        except Exception:
+            return clip
+
+        if array.size == 0:
+            return clip
+
+        if array.ndim == 1:
+            array = array[:, np.newaxis]
+
+        meter = pyln.Meter(sample_rate)
+        loudness = meter.integrated_loudness(array)
+        target_lufs = -28.0
+
+        if np.isfinite(loudness):
+            gain_db = target_lufs - loudness
+            gain = 10 ** (gain_db / 20)
+            normalized = np.clip(array * gain, -1.0, 1.0).astype(np.float32)
+        else:
+            normalized = array.astype(np.float32)
+
+        duration = clip.duration
+        clip.close()
+
+        normalized_clip = AudioArrayClip(normalized, fps=sample_rate)
+        if duration is not None:
+            normalized_clip = normalized_clip.set_duration(duration)
+        return normalized_clip
 
     def _build_scene_clip(
         self,

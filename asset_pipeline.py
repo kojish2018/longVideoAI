@@ -111,7 +111,8 @@ class AssetPipeline:
         prompt_text: Optional[str] = None
         prompt_result: Optional[PromptBuildResult] = None
         if scene.scene_type is SceneType.CONTENT:
-            prompt_result = self._compose_prompt(scene.image_prompt)
+            prompt_source = scene.primary_prompt or scene.image_prompt
+            prompt_result = self._compose_prompt(prompt_source)
             if prompt_result:
                 prompt_text = prompt_result.prompt
                 image_path = self._get_or_create_image(scene.scene_id, prompt_text)
