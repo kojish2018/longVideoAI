@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,9 @@ from video_generator import ScenePlan, TextSegmentPlan, VideoGenerator
 from renderer_factory import make_renderer
 
 logger = get_logger(__name__)
+
+
+_KEN_BURNS_DIRECTIONS = [(-1.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
 
 
 @dataclass
@@ -61,6 +65,8 @@ class LongFormPipeline:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.builder = TimelineBuilder(config.raw)
+        animation_cfg = config.raw.get("animation", {}) if isinstance(config.raw, dict) else {}
+        self._ken_burns_margin = float(animation_cfg.get("ken_burns_margin", 0.08))
 
     def run(self, document: ScriptDocument) -> PipelineResult:
         run_id = datetime.utcnow().strftime("longform_%Y%m%d_%H%M%S")
@@ -173,9 +179,12 @@ class LongFormPipeline:
         scenes: List[SceneOutput],
     ) -> List[ScenePlan]:
         plans: List[ScenePlan] = []
+        margin = self._ken_burns_margin
         for scene_output in scenes:
             narration_path = run_dir / scene_output.narration_path
             image_path = run_dir / scene_output.image_path if scene_output.image_path else None
+            rng = random.Random(scene_output.scene_id)
+            pan_vector = rng.choice(_KEN_BURNS_DIRECTIONS)
             segments = [
                 TextSegmentPlan(
                     segment_index=segment.segment_index,
@@ -194,7 +203,15 @@ class LongFormPipeline:
                     narration_path=narration_path,
                     image_path=image_path,
                     text_segments=segments,
+                    ken_burns_vector=pan_vector,
+                    ken_burns_margin=margin,
                 )
+            )
+            logger.debug(
+                "Scene %s pan vector selected: %s (margin=%.3f)",
+                scene_output.scene_id,
+                pan_vector,
+                margin,
             )
         return plans
 

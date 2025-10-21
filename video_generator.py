@@ -37,6 +37,7 @@ class RenderConfig:
     padding_seconds: float
     ken_burns_zoom: float
     ken_burns_offset: float
+    ken_burns_margin: float
     font_path: Optional[str]
     body_font_size: int
     body_color: Tuple[int, int, int]
@@ -63,6 +64,8 @@ class ScenePlan:
     narration_path: Path
     image_path: Optional[Path]
     text_segments: List[TextSegmentPlan]
+    ken_burns_vector: Tuple[float, float] = (-1.0, -1.0)
+    ken_burns_margin: float = 0.0
 
 
 class VideoGenerator:
@@ -92,8 +95,9 @@ class VideoGenerator:
             audio_bitrate=video_cfg.get("audio_bitrate"),
             audio_sample_rate=int(video_cfg.get("audio_sample_rate", 48000)),
             padding_seconds=float(animation_cfg.get("padding_seconds", 0.35)),
-            ken_burns_zoom=float(animation_cfg.get("ken_burns_zoom", 0.03)),
-            ken_burns_offset=float(animation_cfg.get("ken_burns_offset", 0.01)),
+            ken_burns_zoom=float(animation_cfg.get("ken_burns_zoom", 0.0)),
+            ken_burns_offset=float(animation_cfg.get("ken_burns_offset", 0.03)),
+            ken_burns_margin=float(animation_cfg.get("ken_burns_margin", 0.08)),
             font_path=text_cfg.get("font_path"),
             body_font_size=int(text_cfg.get("default_size", 36)),
             body_color=_hex_to_rgb(colors.get("default", "#FFFFFF")),
@@ -304,6 +308,9 @@ class VideoGenerator:
             clip = ImageClip(str(scene.image_path)).set_duration(duration)
             zoom = self.render_cfg.ken_burns_zoom
             offset = self.render_cfg.ken_burns_offset
+            dir_x, dir_y = getattr(scene, "ken_burns_vector", (-1.0, -1.0))
+            margin = getattr(scene, "ken_burns_margin", self.render_cfg.ken_burns_margin)
+            margin = max(margin, 0.0)
 
             src_w, src_h = clip.size
             target_w = self.render_cfg.width
@@ -313,15 +320,36 @@ class VideoGenerator:
             else:
                 base_scale = max(target_w / src_w, target_h / src_h)
 
+            scale_factor = base_scale * (1.0 + margin)
+            duration_safe = max(duration, 0.01)
+
             clip = clip.resize(
-                lambda t: base_scale * (1 + zoom * (t / max(duration, 0.01)))
+                lambda t: scale_factor * (1 + zoom * (t / duration_safe))
             )
-            clip = clip.set_position(
-                lambda t: (
-                    -target_w * offset * (t / max(duration, 0.01)),
-                    -target_h * offset * (t / max(duration, 0.01)),
+
+            available_fraction_x = max((scale_factor * src_w) / target_w - 1.0, 0.0) / 2.0
+            available_fraction_y = max((scale_factor * src_h) / target_h - 1.0, 0.0) / 2.0
+            if zoom > 0:
+                final_scale = scale_factor * (1 + zoom)
+                available_fraction_x = max((final_scale * src_w) / target_w - 1.0, 0.0) / 2.0
+                available_fraction_y = max((final_scale * src_h) / target_h - 1.0, 0.0) / 2.0
+
+            if margin > 0:
+                travel_ratio = min(offset / margin, 1.0)
+                eff_offset_x = available_fraction_x * travel_ratio
+                eff_offset_y = available_fraction_y * travel_ratio
+            else:
+                eff_offset_x = offset
+                eff_offset_y = offset
+
+            def _position_fn(t: float, *, _w=target_w, _h=target_h) -> Tuple[float, float]:
+                progress = t / duration_safe
+                return (
+                    dir_x * _w * eff_offset_x * progress,
+                    dir_y * _h * eff_offset_y * progress,
                 )
-            )
+
+            clip = clip.set_position(_position_fn)
             clip = clip.on_color(
                 size=(target_w, target_h),
                 color=(0, 0, 0),

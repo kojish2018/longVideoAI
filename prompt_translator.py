@@ -36,7 +36,7 @@ class PromptTranslator:
         data = {"text": normalized, "target_lang": "EN"}
 
         try:
-            response = requests.post(url, headers=headers, data=data, timeout=20)
+            response = requests.post(url, headers=headers, data=data, timeout=10)
             response.raise_for_status()
             translations = response.json().get("translations") or []
             if not translations:

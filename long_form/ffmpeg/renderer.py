@@ -30,6 +30,14 @@ class RenderConfig:
     padding_seconds: float
     ken_burns_zoom: float
     ken_burns_offset: float
+    ken_burns_margin: float
+    ken_burns_motion_scale: float
+    ken_burns_full_travel: bool
+    ken_burns_max_margin: float
+    ken_burns_mode: str
+    ken_burns_pan_extent: float
+    ken_burns_intro_relief: float
+    ken_burns_intro_seconds: float
     font_path: Optional[str]
     body_font_size: int
     body_color: Tuple[int, int, int]
@@ -68,9 +76,17 @@ class FFmpegVideoGenerator:
             audio_bitrate=str(video_cfg.get("audio_bitrate")) if video_cfg.get("audio_bitrate") else None,
             audio_sample_rate=int(video_cfg.get("audio_sample_rate", 48000)),
             padding_seconds=float(animation_cfg.get("padding_seconds", 0.35)),
-            ken_burns_zoom=float(animation_cfg.get("ken_burns_zoom", 0.03)),
+            ken_burns_zoom=float(animation_cfg.get("ken_burns_zoom", 0.0)),
             # Interpreted as fraction of output size (MoviePy parity).
-            ken_burns_offset=float(animation_cfg.get("ken_burns_offset", 0.01)),
+            ken_burns_offset=float(animation_cfg.get("ken_burns_offset", 0.03)),
+            ken_burns_margin=float(animation_cfg.get("ken_burns_margin", 0.08)),
+            ken_burns_motion_scale=float(animation_cfg.get("ken_burns_motion_scale", 1.0)),
+            ken_burns_full_travel=bool(animation_cfg.get("ken_burns_full_travel", False)),
+            ken_burns_max_margin=float(animation_cfg.get("ken_burns_max_margin", 1.0)),
+            ken_burns_mode=str(animation_cfg.get("ken_burns_mode", "zoompan")).lower(),
+            ken_burns_pan_extent=float(animation_cfg.get("ken_burns_pan_extent", 1.0)),
+            ken_burns_intro_relief=float(animation_cfg.get("ken_burns_intro_relief", 0.2)),
+            ken_burns_intro_seconds=float(animation_cfg.get("ken_burns_intro_seconds", 0.8)),
             font_path=text_cfg.get("font_path"),
             body_font_size=int(text_cfg.get("default_size", 36)),
             body_color=_hex_to_rgb(colors.get("default", "#FFFFFF")),
@@ -205,8 +221,18 @@ class FFmpegVideoGenerator:
         # Build inputs: base image (or color), overlays for each segment, narration audio
         inputs: List[str] = []
         if image_path and image_path.exists():
-            # Use single-frame image input; zoompan will expand it to nframes
-            inputs += ["-i", str(image_path)]
+            # Use single-frame image input.
+            if self.render_cfg.ken_burns_mode == "pan_only":
+                # For pan_only, we need a timed stream so crop expressions can use t.
+                inputs += [
+                    "-loop", "1",
+                    "-framerate", str(cfg.fps),
+                    "-t", f"{duration:.3f}",
+                    "-i", str(image_path),
+                ]
+            else:
+                # zoompan path can synthesize frames
+                inputs += ["-i", str(image_path)]
         else:
             # Fallback: provide a single-frame color input, zoompan will expand
             one_frame = 1.0 / max(cfg.fps, 1)
@@ -251,6 +277,15 @@ class FFmpegVideoGenerator:
             duration=duration,
             ken_zoom=cfg.ken_burns_zoom,
             ken_offset=cfg.ken_burns_offset,
+            ken_margin=cfg.ken_burns_margin,
+            ken_motion=cfg.ken_burns_motion_scale,
+            ken_full_travel=cfg.ken_burns_full_travel,
+            ken_max_margin=cfg.ken_burns_max_margin,
+            ken_mode=self.render_cfg.ken_burns_mode,
+            ken_pan_extent=self.render_cfg.ken_burns_pan_extent,
+            ken_intro_relief=self.render_cfg.ken_burns_intro_relief,
+            ken_intro_seconds=self.render_cfg.ken_burns_intro_seconds,
+            ken_vector=getattr(scene, "ken_burns_vector", (-1.0, -1.0)),
             overlays=overlay_specs,
         )
 
@@ -519,6 +554,15 @@ def _build_content_filter(
     duration: float,
     ken_zoom: float,
     ken_offset: float,
+    ken_margin: float,
+    ken_motion: float,
+    ken_full_travel: bool,
+    ken_max_margin: float,
+    ken_mode: str,
+    ken_pan_extent: float,
+    ken_intro_relief: float,
+    ken_intro_seconds: float,
+    ken_vector: Tuple[float, float],
     overlays: List[Tuple[Path, float, float]],
 ) -> str:
     """Return a filter_complex string for base Ken Burns and timed overlays.
@@ -530,21 +574,112 @@ def _build_content_filter(
     chains: List[str] = []
 
     if has_base_image:
-        # idx 0 is the (single-frame) image input; expand to nframes with zoompan
-        zmax = 1.0 + max(ken_zoom, 0.0)
-        nframes = max(int(round(duration * fps)), 1)
-        step = (zmax - 1.0) / nframes
-        # pzoom ensures cumulative zoom progresses across frames
-        zoom = f"min(max(zoom,pzoom)+{step:.7f},{zmax:.6f})"
-        progress = f"(on/{nframes})"
-        offset = max(ken_offset, 0.0)
-        x = "iw/2-(iw/zoom/2) - (iw/zoom) * " + f"{offset:.6f}*{progress}"
-        y = "ih/2-(ih/zoom/2) - (ih/zoom) * " + f"{offset:.6f}*{progress}"
-        chains.append(
-            f"[0:v]zoompan=z='{zoom}':x='{x}':y='{y}':d={nframes}:s={w}x{h}:fps={fps}[base]"
-        )
-        last = "[base]"
-        next_input_index = 1
+        # idx 0 is the (single-frame) image input; expand with either crop-pan (pan_only)
+        # or zoompan (default). Always scale to cover + margin first.
+        margin_raw = max(ken_margin, 0.0)
+        offset_raw = max(ken_offset, 0.0)
+        motion = ken_motion if isinstance(ken_motion, (int, float)) else 1.0
+        if not isinstance(motion, (int, float)) or motion <= 0:
+            motion = 1.0
+        max_margin = ken_max_margin if isinstance(ken_max_margin, (int, float)) else 1.0
+        if not isinstance(max_margin, (int, float)) or max_margin <= 0:
+            max_margin = 1.0
+        margin = min(margin_raw * motion, max_margin)
+        offset = min(offset_raw * motion, 1.0)
+
+        base_cover = f"max({w}/iw\\,{h}/ih)"
+        source_label = "[base_in]"
+        # Intro relief: start with smaller effective margin then ramp up over intro_seconds
+        relief = max(0.0, min(1.0, float(ken_intro_relief))) if isinstance(ken_intro_relief, (int, float)) else 0.2
+        intro_frames = int(round(max(0.0, float(ken_intro_seconds)) * fps)) if isinstance(ken_intro_seconds, (int, float)) else 0
+        if intro_frames >= 1 and str(ken_mode).lower() == "pan_only":
+            p_expr = f"min(n/{max(intro_frames,1)},1)"
+            ease = f"(1-pow(1-({p_expr}),3))"  # ease-out cubic
+            margin_eff = f"({margin:.6f}*({relief:.6f} + (1-{relief:.6f})*{ease}))"
+            scale_expr = f"({base_cover})*(1+{margin_eff})"
+            chains.append(
+                f"[0:v]scale=iw*{scale_expr}:ih*{scale_expr}:eval=frame{source_label}"
+            )
+        else:
+            scale_expr = f"({base_cover})*{(1.0 + margin):.6f}"
+            chains.append(f"[0:v]scale=iw*{scale_expr}:ih*{scale_expr}{source_label}")
+
+        if str(ken_mode).lower() == "pan_only":
+            # Zoom-independent pan using crop with animated x/y.
+            extent_raw = ken_pan_extent if isinstance(ken_pan_extent, (int, float)) else 1.0
+            if not isinstance(extent_raw, (int, float)) or extent_raw <= 0:
+                extent_raw = 1.0
+            extent = 1.0 if ken_full_travel else min(extent_raw * motion, 1.0)
+
+            dir_x, dir_y = ken_vector if isinstance(ken_vector, tuple) else (-1.0, -1.0)
+            dir_x = dir_x if isinstance(dir_x, (int, float)) else -1.0
+            dir_y = dir_y if isinstance(dir_y, (int, float)) else -1.0
+
+            prog = f"min(max(t/{duration:.6f},0),1)"
+            span_x = f"((iw-{w})*{extent:.6f}/2)"
+            span_y = f"((ih-{h})*{extent:.6f}/2)"
+            cx = f"(iw-{w})/2"
+            cy = f"(ih-{h})/2"
+
+            if dir_x > 0:
+                x_expr = f"({cx})-({span_x}) + (2*{span_x})*({prog})"
+            elif dir_x < 0:
+                x_expr = f"({cx})+({span_x}) - (2*{span_x})*({prog})"
+            else:
+                x_expr = f"{cx}"
+            if dir_y > 0:
+                y_expr = f"({cy})-({span_y}) + (2*{span_y})*({prog})"
+            elif dir_y < 0:
+                y_expr = f"({cy})+({span_y}) - (2*{span_y})*({prog})"
+            else:
+                y_expr = f"{cy}"
+
+            x = f"min(max({x_expr},0), iw-{w})"
+            y = f"min(max({y_expr},0), ih-{h})"
+            chains.append(
+                f"{source_label}crop=w={w}:h={h}:x='{x}':y='{y}',fps={fps},format=yuv420p[base]"
+            )
+            last = "[base]"
+            next_input_index = 1
+        else:
+            # Default zoompan branch (with epsilon clamp for zoom<=0)
+            _eps = 0.015
+            _eff_zoom = ken_zoom if (isinstance(ken_zoom, (int, float)) and ken_zoom > 0.0) else _eps
+            if not (isinstance(ken_zoom, (int, float)) and ken_zoom > 0.0):
+                try:
+                    logger.debug(
+                        "FFmpeg: ken_burns_zoom %.3f <= 0; clamped to epsilon %.3f",
+                        float(ken_zoom) if isinstance(ken_zoom, (int, float)) else -999.0,
+                        _eps,
+                    )
+                except Exception:
+                    pass
+
+            zmax = 1.0 + _eff_zoom
+            nframes = max(int(round(duration * fps)), 1)
+            step = (zmax - 1.0) / nframes if nframes > 0 else 0.0
+            zoom_expr = f"min(max(zoom,pzoom)+{step:.7f},{zmax:.6f})"
+            progress = f"(on/{nframes})"
+
+            dir_x, dir_y = ken_vector if isinstance(ken_vector, tuple) else (-1.0, -1.0)
+            dir_x = dir_x if isinstance(dir_x, (int, float)) else -1.0
+            dir_y = dir_y if isinstance(dir_y, (int, float)) else -1.0
+
+            if margin > 0:
+                travel_ratio = 1.0 if ken_full_travel else min(offset / margin, 1.0)
+                delta_x = f"((iw/zoom)-{w})*{travel_ratio:.6f}*{progress}"
+                delta_y = f"((ih/zoom)-{h})*{travel_ratio:.6f}*{progress}"
+            else:
+                delta_x = f"max((iw/zoom)-{w}\,0)*{offset:.6f}*{progress}"
+                delta_y = f"max((ih/zoom)-{h}\,0)*{offset:.6f}*{progress}"
+
+            x = f"iw/2-(iw/zoom/2) + ({dir_x:.6f})*{delta_x}"
+            y = f"ih/2-(ih/zoom/2) + ({dir_y:.6f})*{delta_y}"
+            chains.append(
+                f"{source_label}zoompan=z='{zoom_expr}':x='{x}':y='{y}':d={nframes}:s={w}x{h}:fps={fps}[base]"
+            )
+            last = "[base]"
+            next_input_index = 1
     else:
         # idx 0 is a color video already at w x h
         last = "[0:v]"
