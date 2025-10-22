@@ -97,6 +97,63 @@ class FFmpegVideoGenerator:
         self._font_cache: Dict[Tuple[int, bool], ImageFont.FreeTypeFont] = {}
         self._overlay_cache: Dict[Tuple[str, int, Tuple[str, ...]], Path] = {}
         self._opening_cache: Dict[Tuple[str, Tuple[str, ...]], Path] = {}
+        # Overlay/text effect mode from runtime config (default: static)
+        overlay_cfg = config.get("overlay", {}) if isinstance(config, dict) else {}
+        try:
+            self.overlay_mode = str(overlay_cfg.get("type", "static")).lower()
+        except Exception:
+            self.overlay_mode = "static"
+        try:
+            ts = overlay_cfg.get("typing_speed", 1.0)
+            self.typing_speed = float(ts) if isinstance(ts, (int, float, str)) else 1.0
+        except Exception:
+            self.typing_speed = 1.0
+        # Determine font family and bold preference for ASS to match PNG overlay
+        text_cfg = config.get("text", {}) if isinstance(config, dict) else {}
+        self.ass_font_family = str(text_cfg.get("font_family", "Noto Sans JP"))
+        font_path = str(text_cfg.get("font_path", "")) if isinstance(text_cfg, dict) else ""
+        lower_fp = font_path.lower()
+        self.ass_bold = any(key in lower_fp for key in ("bold", "extrabold", "black", "heavy", "demibold", "semibold"))
+
+        # Try to extract PostScript name from font file for stable selection in libass
+        def _ps_name_from_font(path: str) -> str | None:
+            if not path:
+                return None
+            try:
+                from fontTools.ttLib import TTFont  # type: ignore
+            except Exception:
+                # Fallback to filename stem
+                try:
+                    from pathlib import Path as _P
+                    stem = _P(path).stem
+                    return stem if stem else None
+                except Exception:
+                    return None
+            try:
+                font = TTFont(path)
+                name_records = font["name"].names if "name" in font else []
+                for rec in name_records:
+                    if rec.nameID == 6:  # PostScript name
+                        try:
+                            return rec.toStr()
+                        except Exception:
+                            try:
+                                return rec.string.decode(rec.getEncoding(), errors="ignore")
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+            # Last resort: filename stem
+            try:
+                from pathlib import Path as _P
+                stem = _P(path).stem
+                return stem if stem else None
+            except Exception:
+                return None
+
+        self.ass_font_psname = _ps_name_from_font(font_path) or self.ass_font_family
+        # Style override string for subtitles filter
+        self.ass_force_style = f"FontName={self.ass_font_psname},Bold={(1 if self.ass_bold else 0)}"
 
     # Public API ---------------------------------------------------------
     def render(
@@ -151,14 +208,124 @@ class FFmpegVideoGenerator:
         scene_id = str(getattr(scene, "scene_id", "OPENING"))
         out = scene_dir / f"{scene_id}.mp4"
 
-        # Prepare overlay image (centered text)
-        segs = list(getattr(scene, "text_segments", []))
-        lines = list(getattr(segs[0], "lines", [])) if segs else [title]
-        overlay = self._create_center_text_image(run_dir, scene_id, lines)
-
-        args: List[str] = []
         cfg = self.render_cfg
-        # Inputs: narration audio and overlay image
+        segs = list(getattr(scene, "text_segments", []))
+        lines = [ln for ln in (list(getattr(segs[0], "lines", [])) if segs else [title]) if str(ln).strip()]
+
+        # Typing mode: render black base + ASS karaoke (no PNG text)
+        if getattr(self, "overlay_mode", "static") == "typing":
+            ass_dir = run_dir / "ass"
+            ass_dir.mkdir(parents=True, exist_ok=True)
+            ass_path = ass_dir / f"{scene_id}.ass"
+
+            try:
+                from long_form.ass_timeline import build_ass_karaoke_centered, KaraokeLineSpec
+                font = self._get_font(self.render_cfg.opening_title_font_size, bold=True)
+                # vertical layout to center lines (match PNG logic)
+                sizes: List[Tuple[int, int]] = [self._measure_text(font, ln) for ln in lines]
+                total_height = sum(h for (_, h) in sizes)
+                spacing = int(font.size * 0.6)
+                if len(lines) > 1:
+                    total_height += spacing * (len(lines) - 1)
+                y0 = int((cfg.height - total_height) / 2)
+
+                # typing cps across all chars in duration
+                total_chars = sum(len(ln) for ln in lines)
+                base_cps = max(total_chars / max(duration, 0.01), 1.0)
+                cps = max(base_cps * float(getattr(self, "typing_speed", 1.0)), 1.0)
+
+                specs: List[KaraokeLineSpec] = []
+                cur_y = y0
+                consumed = 0
+                for idx, (ln, (_w, h)) in enumerate(zip(lines, sizes)):
+                    t0 = consumed / cps
+                    specs.append(
+                        KaraokeLineSpec(
+                            t0=t0,
+                            seg_end=duration,
+                            cps=cps,
+                            text=str(ln),
+                            pos_cx=int(cfg.width / 2),
+                            pos_y=int(cur_y),
+                        )
+                    )
+                    consumed += len(ln)
+                    cur_y += h
+                    if idx < len(lines) - 1:
+                        cur_y += spacing
+
+                fontname = self.ass_font_psname or self.ass_font_family or "Noto Sans JP"
+                ass_text = build_ass_karaoke_centered(
+                    width=cfg.width,
+                    height=cfg.height,
+                    fontname=fontname,
+                    fontsize=self.render_cfg.opening_title_font_size,
+                    lines=specs,
+                    bold=True,
+                )
+                ass_path.write_text(ass_text, encoding="utf-8")
+            except Exception as exc:
+                logger.exception("ASS generation (opening) failed: %s", exc)
+                ass_path = None
+
+            # Build inputs: black base + narration audio
+            args: List[str] = []
+            narration_path = Path(getattr(scene, "narration_path"))
+            args += [
+                "-t",
+                f"{duration:.3f}",
+                "-f",
+                "lavfi",
+                "-r",
+                str(cfg.fps),
+                "-i",
+                f"color=c=black:size={cfg.width}x{cfg.height}",
+                "-i",
+                str(narration_path),
+                "-filter_complex",
+                _build_content_filter(
+                    has_base_image=False,
+                    w=cfg.width,
+                    h=cfg.height,
+                    fps=cfg.fps,
+                    duration=duration,
+                    ken_zoom=0.0,
+                    ken_offset=0.0,
+                    ken_margin=0.0,
+                    ken_motion=1.0,
+                    ken_full_travel=False,
+                    ken_max_margin=1.0,
+                    ken_mode="zoompan",
+                    ken_pan_extent=1.0,
+                    ken_intro_relief=0.0,
+                    ken_intro_seconds=0.0,
+                    ken_vector=(0.0, 0.0),
+                    overlays=[],
+                    ass_subtitles_path=ass_path,
+                    ass_force_style=self.ass_force_style if ass_path is not None else None,
+                ),
+                "-map",
+                "[vout]",
+                "-map",
+                "1:a:0",
+            ]
+            args += _encode_args(cfg)
+            args += ["-shortest", "-y", str(out)]
+            if bar is None:
+                run_ffmpeg(args)
+            else:
+                run_ffmpeg_stream(
+                    args,
+                    expected_duration_sec=duration,
+                    label="Opening",
+                    external_bar=bar,
+                    offset_seconds=offset_seconds,
+                )
+            return out
+
+        # Static mode (default): render centered PNG text on black
+        overlay = self._create_center_text_image(run_dir, scene_id, lines)
+        args: List[str] = []
         narration_path = Path(getattr(scene, "narration_path"))
         args += [
             "-t",
@@ -169,7 +336,6 @@ class FFmpegVideoGenerator:
             str(cfg.fps),
             "-i",
             f"color=c=black:size={cfg.width}x{cfg.height}",
-            # Loop overlay PNG to full duration to avoid early termination
             "-loop",
             "1",
             "-framerate",
@@ -244,14 +410,32 @@ class FFmpegVideoGenerator:
             ]
 
         overlay_specs: List[Tuple[Path, float, float]] = []
-        for seg in getattr(scene, "text_segments", []) or []:
-            lines = [str(s) for s in getattr(seg, "lines", [])]
-            if not any(line.strip() for line in lines):
-                continue
-            overlay = self._create_text_overlay(run_dir, scene_id, seg)
-            start = float(getattr(seg, "start_offset", 0.0))
-            dur = float(getattr(seg, "duration", 0.0))
-            overlay_specs.append((overlay, start, dur))
+        text_segments = list(getattr(scene, "text_segments", []) or [])
+        # For typing mode: render band-only PNG and collect fixed positions for ASS
+        fixedpos_segments: List[Tuple[float, float, List[str], int, int]] = []
+        if self.overlay_mode != "typing":
+            for seg in text_segments:
+                lines = [str(s) for s in getattr(seg, "lines", [])]
+                if not any(line.strip() for line in lines):
+                    continue
+                overlay = self._create_text_overlay(run_dir, scene_id, seg)
+                start = float(getattr(seg, "start_offset", 0.0))
+                dur = float(getattr(seg, "duration", 0.0))
+                overlay_specs.append((overlay, start, dur))
+        else:
+            for seg in text_segments:
+                lines = [str(s) for s in getattr(seg, "lines", [])]
+                if not any(line.strip() for line in lines):
+                    continue
+                band_overlay, geom = self._create_band_overlay(run_dir, scene_id, seg)
+                start = float(getattr(seg, "start_offset", 0.0))
+                dur = float(getattr(seg, "duration", 0.0))
+                overlay_specs.append((band_overlay, start, dur))
+                # Fixed positions for ASS text (top-left of text area), absolute to video
+                pos_x = int(geom["horizontal_margin"])  # left margin equals rectangle left
+                # overlay placed at bottom: top pixel = H - band_height
+                pos_y = int(self.render_cfg.height - geom["band_height"] + geom["text_top_y"])
+                fixedpos_segments.append((start, dur, lines, pos_x, pos_y))
 
         for overlay, _, _ in overlay_specs:
             inputs += [
@@ -268,7 +452,51 @@ class FFmpegVideoGenerator:
         narration_path = Path(getattr(scene, "narration_path"))
         inputs += ["-i", str(narration_path)]
 
-        # Build filter graph for base Ken Burns + bottom overlays
+        # Build filter graph for base Ken Burns + overlays; add subtitles after overlays so text stays above the band
+        ass_path = None
+        if self.overlay_mode == "typing":
+            ass_dir = run_dir / "ass"
+            ass_dir.mkdir(parents=True, exist_ok=True)
+            ass_path = ass_dir / f"{scene_id}.ass"
+            try:
+                from long_form.ass_timeline import build_ass_karaoke_centered, KaraokeLineSpec
+                font = self._get_font(self.render_cfg.body_font_size)
+                karaoke_specs: List[KaraokeLineSpec] = []
+                for (start, dur, lines, px_left, py_top) in fixedpos_segments:
+                    if dur <= 0:
+                        continue
+                    multi_line = len(lines) > 1
+                    line_spacing = int(font.size * (0.42 if multi_line else 0.25))
+                    heights: List[int] = [self._measure_text(font, ln)[1] for ln in lines]
+                    total_chars = sum(len(ln) for ln in lines)
+                    base_cps = max(total_chars / max(dur, 0.01), 1.0)
+                    cps = max(base_cps * float(self.typing_speed), 1.0)
+                    y = py_top
+                    cx = int(self.render_cfg.width / 2)
+                    offset_chars = 0
+                    for idx, (line, th) in enumerate(zip(lines, heights)):
+                        t0 = start + offset_chars / cps
+                        seg_end = start + dur
+                        karaoke_specs.append(KaraokeLineSpec(t0=t0, seg_end=seg_end, cps=cps, text=line, pos_cx=cx, pos_y=int(y)))
+                        offset_chars += len(line)
+                        y += th
+                        if idx < len(lines) - 1:
+                            y += line_spacing
+                fontname = self.ass_font_psname or self.ass_font_family or "Noto Sans JP"
+                fontsize = int(getattr(self.render_cfg, "body_font_size", 36))
+                ass_text = build_ass_karaoke_centered(
+                    width=self.render_cfg.width,
+                    height=self.render_cfg.height,
+                    fontname=fontname,
+                    fontsize=fontsize,
+                    lines=karaoke_specs,
+                    bold=self.ass_bold,
+                )
+                ass_path.write_text(ass_text, encoding="utf-8")
+            except Exception as exc:
+                logger.exception("ASS generation failed for %s: %s", scene_id, exc)
+                ass_path = None
+
         filter_graph = _build_content_filter(
             has_base_image=bool(image_path and image_path.exists()),
             w=cfg.width,
@@ -287,6 +515,8 @@ class FFmpegVideoGenerator:
             ken_intro_seconds=self.render_cfg.ken_burns_intro_seconds,
             ken_vector=getattr(scene, "ken_burns_vector", (-1.0, -1.0)),
             overlays=overlay_specs,
+            ass_subtitles_path=ass_path,
+            ass_force_style=self.ass_force_style if ass_path is not None else None,
         )
 
         args: List[str] = inputs + [
@@ -466,6 +696,70 @@ class FFmpegVideoGenerator:
         self._overlay_cache[cache_key] = output_path
         return output_path
 
+    def _create_band_overlay(self, run_dir: Path, scene_id: str, segment: object) -> Tuple[Path, dict]:
+        """Create a band-only PNG (no text) matching static style and return geometry.
+
+        Returns (path, geom) where geom includes:
+          - band_height
+          - horizontal_margin
+          - text_top_y (within the overlay image)
+          - text_block_height (estimated from font & lines)
+        """
+        lines: List[str] = [str(s) for s in getattr(segment, "lines", [])]
+        seg_index = int(getattr(segment, "segment_index", 0))
+
+        font = self._get_font(self.render_cfg.body_font_size)
+        multi_line = len(lines) > 1
+        line_spacing = int(font.size * (0.42 if multi_line else 0.25))
+
+        text_sizes = [self._measure_text(font, line) for line in lines]
+        text_block_height = sum(size[1] for size in text_sizes)
+        if multi_line:
+            text_block_height += line_spacing * (len(lines) - 1)
+
+        outer_margin_top = max(int(font.size * 0.12), 6)
+        outer_margin_bottom = max(int(font.size * 0.35), 18)
+        inner_padding_top = max(int(font.size * 0.45), 20)
+        inner_padding_bottom = max(int(font.size * 0.7), 28)
+
+        band_height = (
+            text_block_height
+            + inner_padding_top
+            + inner_padding_bottom
+            + outer_margin_top
+            + outer_margin_bottom
+        )
+        image = Image.new("RGBA", (self.render_cfg.width, band_height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image, "RGBA")
+
+        horizontal_margin = max(int(self.render_cfg.width * 0.018), 18)
+        radius = max(int(font.size * 0.42), 18)
+        rect_top = outer_margin_top
+        rect_bottom = band_height - outer_margin_bottom
+        rect = [
+            (horizontal_margin, rect_top),
+            (self.render_cfg.width - horizontal_margin, rect_bottom),
+        ]
+        draw.rounded_rectangle(rect, radius=radius, fill=self.render_cfg.band_color)
+
+        inner_top = rect_top + inner_padding_top
+        inner_bottom = rect_bottom - inner_padding_bottom
+        available_inner = max(inner_bottom - inner_top, 0)
+        text_top_y = inner_top + max((available_inner - text_block_height) // 2, 0)
+
+        overlay_dir = run_dir / "overlays"
+        overlay_dir.mkdir(parents=True, exist_ok=True)
+        output_path = overlay_dir / f"{scene_id}_seg{seg_index:02d}_band.png"
+        image.save(output_path, format="PNG")
+
+        geom = {
+            "band_height": band_height,
+            "horizontal_margin": horizontal_margin,
+            "text_top_y": int(text_top_y),
+            "text_block_height": int(text_block_height),
+        }
+        return output_path, geom
+
     def _create_center_text_image(self, run_dir: Path, scene_id: str, lines: List[str]) -> Path:
         cache_key = (scene_id, tuple(lines))
         if cache_key in self._opening_cache:
@@ -564,6 +858,8 @@ def _build_content_filter(
     ken_intro_seconds: float,
     ken_vector: Tuple[float, float],
     overlays: List[Tuple[Path, float, float]],
+    ass_subtitles_path: Path | None = None,
+    ass_force_style: str | None = None,
 ) -> str:
     """Return a filter_complex string for base Ken Burns and timed overlays.
 
@@ -685,6 +981,8 @@ def _build_content_filter(
         last = "[0:v]"
         next_input_index = 1
 
+        # (moved) apply ASS after PNG overlays to ensure text sits on top
+
     # Timed overlays
     for i, (_overlay, start, dur) in enumerate(overlays, start=0):
         end = start + max(dur, 0.0)
@@ -695,6 +993,19 @@ def _build_content_filter(
             f"{last}[{idx}:v]overlay=x=0:y=H-h:enable='{enable}'{label}".replace("H", str(h))
         )
         last = label
+
+    # Apply ASS subtitles last so text draws above PNG band overlays
+    if ass_subtitles_path is not None:
+        p = str(ass_subtitles_path).replace("'", "'\\''")
+        fontsdir = "fonts"
+        fonts_clause = f":fontsdir='{fontsdir}'" if fontsdir else ""
+        if ass_force_style:
+            fs = ass_force_style.replace("'", "'\\''")
+            force_clause = f":force_style='{fs}'"
+        else:
+            force_clause = ""
+        chains.append(f"{last}subtitles=filename='{p}'{fonts_clause}{force_clause}[vsub]")
+        last = "[vsub]"
 
     chains.append(f"{last}format=yuv420p[vout]")
     return ";".join(chains)

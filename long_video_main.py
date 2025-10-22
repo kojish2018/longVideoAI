@@ -49,6 +49,20 @@ def build_parser() -> argparse.ArgumentParser:
             "or local time 'YYYY-MM-DD HH:MM'."
         ),
     )
+    parser.add_argument(
+        "--type",
+        dest="overlay_type",
+        choices=["static", "typing"],
+        default="static",
+        help="Text overlay style: static (default) or typing",
+    )
+    parser.add_argument(
+        "--typing-speed",
+        dest="typing_speed",
+        type=float,
+        default=2.0,
+        help="Typing speed multiplier (>1.0 is faster). Default 2.0 when --type typing",
+    )
     return parser
 
 
@@ -269,6 +283,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(args.config, project_root=Path.cwd())
+
+    # Runtime override: expose overlay type to renderer via config
+    try:
+        overlay_cfg = dict(config.raw.get("overlay", {})) if isinstance(config.raw, dict) else {}
+        overlay_cfg["type"] = args.overlay_type
+        overlay_cfg["typing_speed"] = float(args.typing_speed or 1.0)
+        config.raw["overlay"] = overlay_cfg
+    except Exception:
+        # Fallback defensively; keep pipeline running even if config is not a dict
+        pass
 
     if args.output_dir:
         override = Path(args.output_dir).expanduser().resolve()
