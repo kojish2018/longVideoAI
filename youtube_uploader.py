@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Sequence
+import random
+import time
+import ssl
+import socket
+from http.client import IncompleteRead
 
 try:  # pragma: no cover - optional dependency guard
     from google.auth.transport.requests import Request
@@ -58,6 +63,24 @@ class YouTubeUploader:
         self._default_tags = list(self._config.get("default_tags", ["ai", "longform", "documentary"]))
         self._youtube = None
 
+        # Retry behavior (configurable with safe defaults)
+        try:
+            self._max_retries = int(self._config.get("max_retries", 3))
+        except Exception:
+            self._max_retries = 3
+        try:
+            self._backoff_base = float(self._config.get("retry_backoff_base", 2.0))
+        except Exception:
+            self._backoff_base = 2.0
+        try:
+            self._max_backoff = float(self._config.get("retry_max_backoff", 30.0))
+        except Exception:
+            self._max_backoff = 30.0
+        try:
+            self._resumable_max_retries = int(self._config.get("resumable_max_retries", 5))
+        except Exception:
+            self._resumable_max_retries = 5
+
         logger.info(
             "YouTubeUploader 初期化: privacy=%s, category_id=%s", self._default_privacy, self._default_category
         )
@@ -98,6 +121,10 @@ class YouTubeUploader:
                     fh.write(creds.to_json())
                     logger.info("YouTube トークン情報を保存しました: %s", self._token_path)
 
+            scopes = getattr(creds, "scopes", None)
+            logger.info("YouTube OAuth scopes: %s", scopes)
+            scopes = getattr(creds, "scopes", None)
+            logger.info("YouTube OAuth scopes: %s", scopes)
             self._youtube = build("youtube", "v3", credentials=creds)
             logger.info("YouTube API 認証に成功しました。")
             return True
@@ -116,7 +143,10 @@ class YouTubeUploader:
         publish_at: Optional[str] = None,
         thumbnail_path: Optional[Path | str] = None,
     ) -> Optional[str]:
-        """動画をアップロードし、成功時は video_id を返す。"""
+        """動画をアップロードし、成功時は video_id を返す。
+
+        一時的なエラー時は最大 self._max_retries 回まで全体を再試行する。
+        """
         if not _YOUTUBE_API_AVAILABLE:
             logger.error("YouTube API が利用できないためアップロードを中止します。")
             return None
@@ -136,61 +166,84 @@ class YouTubeUploader:
         if payload is None:
             return None
 
-        logger.info("YouTube へアップロードを開始します: %s", payload.video_path)
-        try:
-            body = {
-                "snippet": {
-                    "title": payload.title,
-                    "description": payload.description,
-                    "tags": list(payload.tags),
-                    "categoryId": payload.category_id,
-                },
-                "status": {
-                    "privacyStatus": payload.privacy,
-                    "selfDeclaredMadeForKids": False,
-                },
-            }
+        attempt = 0
+        while attempt < max(1, int(self._max_retries)):
+            attempt += 1
+            if attempt == 1:
+                logger.info("YouTube へアップロードを開始します: %s", payload.video_path)
+            else:
+                logger.info("YouTube アップロードを再試行します (%d/%d)", attempt, self._max_retries)
 
-            if payload.publish_at:
-                body["status"]["publishAt"] = payload.publish_at
-                logger.info("予約公開日時: %s", payload.publish_at)
+            try:
+                body = {
+                    "snippet": {
+                        "title": payload.title,
+                        "description": payload.description,
+                        "tags": list(payload.tags),
+                        "categoryId": payload.category_id,
+                    },
+                    "status": {
+                        "privacyStatus": payload.privacy,
+                        "selfDeclaredMadeForKids": False,
+                    },
+                }
 
-            media = MediaFileUpload(
-                str(payload.video_path),
-                chunksize=-1,
-                resumable=True,
-                mimetype="video/mp4",
-            )
+                if payload.publish_at:
+                    body["status"]["publishAt"] = payload.publish_at
+                    if attempt == 1:
+                        logger.info("予約公開日時: %s", payload.publish_at)
 
-            request = self._youtube.videos().insert(
-                part="snippet,status",
-                body=body,
-                media_body=media,
-            )
+                media = MediaFileUpload(
+                    str(payload.video_path),
+                    chunksize=-1,
+                    resumable=True,
+                    mimetype="video/mp4",
+                )
 
-            response = self._resumable_upload(request)
-            if not response:
-                logger.error("YouTube アップロードが失敗しました。")
+                request = self._youtube.videos().insert(
+                    part="snippet,status",
+                    body=body,
+                    media_body=media,
+                )
+
+                response = self._resumable_upload(request)
+                if not response:
+                    raise RuntimeError("YouTube API から有効な応答が得られませんでした")
+
+                video_id = response.get("id")
+                if not video_id:
+                    raise RuntimeError(f"動画 ID が応答に含まれていません: {response}")
+
+                logger.info("YouTube アップロード成功: video_id=%s", video_id)
+
+                if payload.thumbnail_path:
+                    self._set_thumbnail(video_id=video_id, thumbnail_path=payload.thumbnail_path)
+
+                return video_id
+
+            except Exception as exc:  # pragma: no cover - network interaction
+                # 分類: 一過性の可能性が高い場合はバックオフして再試行
+                is_http_transient = self._is_transient_http_error(exc)
+                is_transient = is_http_transient or self._is_transient_exception(exc)
+                if is_transient and attempt < self._max_retries:
+                    sleep = self._compute_backoff(attempt)
+                    logger.warning(
+                        "一時的エラーのためアップロードを再試行します (%d/%d, %.1f 秒後): %s",
+                        attempt + 1,
+                        self._max_retries,
+                        sleep,
+                        exc,
+                    )
+                    time.sleep(sleep)
+                    continue
+
+                # 恒久的エラー、もしくは試行上限
+                if is_http_transient:
+                    logger.error("YouTube API エラー: %s", exc)
+                else:
+                    # ネットワーク系は stacktrace を残す
+                    logger.exception("YouTube アップロード処理で予期せぬエラー: %s", exc)
                 return None
-
-            video_id = response.get("id")
-            if not video_id:
-                logger.error("YouTube API から動画 ID が取得できませんでした: %s", response)
-                return None
-
-            logger.info("YouTube アップロード成功: video_id=%s", video_id)
-
-            if payload.thumbnail_path:
-                self._set_thumbnail(video_id=video_id, thumbnail_path=payload.thumbnail_path)
-
-            return video_id
-
-        except HttpError as exc:  # pragma: no cover - API call
-            logger.error("YouTube API エラー: %s", exc)
-            return None
-        except Exception as exc:  # pragma: no cover - catch-all
-            logger.exception("YouTube アップロード処理で予期せぬエラー: %s", exc)
-            return None
 
     # ------------------------------------------------------------------
     # 内部ユーティリティ
@@ -257,47 +310,98 @@ class YouTubeUploader:
 
     def _resumable_upload(self, request):
         response = None
-        error = None
         retry = 0
         while response is None:
             try:
                 status, response = request.next_chunk()
                 if status:
                     logger.info("YouTube アップロード進捗: %d%%", int(status.progress() * 100))
-            except HttpError as exc:  # pragma: no cover - API call
-                if exc.resp.status in {500, 502, 503, 504}:
-                    error = exc
+            except Exception as exc:  # pragma: no cover - API call
+                # HttpError 5xx/429 やネットワーク系例外はレジューム継続のため再試行
+                if self._is_transient_http_error(exc) or self._is_transient_exception(exc):
                     retry += 1
-                    if retry > 5:
+                    if retry > self._resumable_max_retries:
                         logger.error("YouTube アップロードのリトライ回数が上限に達しました。")
                         raise
-                    backoff = 2 ** retry
-                    logger.warning("一時的なエラーのためリトライします (%d 秒後): %s", backoff, error)
-                    import time
-
+                    backoff = self._compute_backoff(retry)
+                    logger.warning(
+                        "一時的なエラーのためレジュームをリトライします (試行 %d/%d, %.1f 秒後): %s",
+                        retry,
+                        self._resumable_max_retries,
+                        backoff,
+                        exc,
+                    )
                     time.sleep(backoff)
                     continue
-                raise
-            except Exception:
+                # 非一時的エラーは呼び出し元で処理
                 logger.exception("YouTube アップロードのレジューム処理でエラーが発生しました。")
                 raise
         return response
+
+    # ------------------------------------------------------------------
+    # エラー分類・バックオフ
+    # ------------------------------------------------------------------
+    def _compute_backoff(self, attempt: int) -> float:
+        base = max(0.5, float(self._backoff_base))
+        seconds = min(self._max_backoff, base ** max(1, attempt))
+        # 20% ジッタを乗せてスパイク回避
+        jitter = 0.8 + random.random() * 0.4
+        return max(0.5, seconds * jitter)
+
+    def _is_transient_http_error(self, exc: Exception) -> bool:
+        # googleapiclient.errors.HttpError であれば resp.status を参照
+        status = getattr(getattr(exc, "resp", None), "status", None)
+        if isinstance(status, int):
+            return status in {429, 500, 502, 503, 504}
+        return False
+
+    def _is_transient_exception(self, exc: Exception) -> bool:
+        if isinstance(exc, (ssl.SSLError, socket.timeout, ConnectionResetError, BrokenPipeError, IncompleteRead)):
+            return True
+        if isinstance(exc, OSError):
+            # ECONNRESET(54/104), ETIMEDOUT(110), ECONNREFUSED(111) 等を緩くカバー
+            if getattr(exc, "errno", None) in {54, 104, 110, 111}:
+                return True
+        return False
 
     def _set_thumbnail(self, *, video_id: str, thumbnail_path: Path) -> None:
         if not thumbnail_path.exists():
             logger.warning("サムネイル画像が見つからないためスキップします: %s", thumbnail_path)
             return
 
-        logger.info("YouTube サムネイルを設定します: %s", thumbnail_path)
+        logger.info("YouTube サムネイルを設定します: %s (video_id=%s)", thumbnail_path, video_id)
         try:
+            size = -1
+            try:
+                size = thumbnail_path.stat().st_size
+            except Exception:
+                pass
             guessed_type, _ = mimetypes.guess_type(str(thumbnail_path))
             mimetype = guessed_type or "image/png"
+            logger.debug("Thumbnail meta: size=%d bytes, mime=%s", size, mimetype)
+
             media = MediaFileUpload(str(thumbnail_path), mimetype=mimetype)
             request = self._youtube.thumbnails().set(videoId=video_id, media_body=media)
-            request.execute()
+
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    request.execute()
+                    logger.info("サムネイル設定に成功しました")
+                    return
+                except HttpError as exc:
+                    status = getattr(getattr(exc, "resp", None), "status", None)
+                    logger.warning("thumbnails.set 失敗: status=%s attempt=%d/%d details=%s", status, attempt, max_attempts, exc)
+                    if attempt < max_attempts and isinstance(status, int) and status in {403, 429, 500, 502, 503, 504}:
+                        wait = min(60.0, self._compute_backoff(attempt))
+                        logger.info("%.1fs 待機後にサムネイル再試行", wait)
+                        time.sleep(wait)
+                        continue
+                    raise
         except HttpError as exc:  # pragma: no cover - API call
-            logger.error("サムネイル設定に失敗しました: %s", exc)
-        except Exception:  # pragma: no cover - catch-all
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            logger.error("サムネイル設定に失敗しました: status=%s details=%s", status, exc)
+        except Exception:
             logger.exception("サムネイル設定処理で予期せぬエラーが発生しました")
 
 
