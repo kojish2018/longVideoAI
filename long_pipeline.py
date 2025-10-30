@@ -245,12 +245,19 @@ class LongFormPipeline:
         base_image = self._select_thumbnail_image(run_dir, scenes)
         title = document.thumbnail_title or "Longform Video"
         output_name = f"thumbnail_{run_id}.png"
+        thumb_cfg = self.config.raw.get("thumbnail", {}) if isinstance(self.config.raw, dict) else {}
+        style_override: str | None = None
+        if isinstance(thumb_cfg, dict):
+            style_value = thumb_cfg.get("style")
+            if isinstance(style_value, str) and style_value.strip():
+                style_override = style_value.strip().lower()
         try:
             return generator.generate(
                 title=title,
                 base_image=base_image,
                 output_name=output_name,
                 subtitle=None,
+                style=style_override,
             )
         except Exception as exc:  # pragma: no cover - safeguarding pipeline
             logger.exception("Thumbnail generation failed: %s", exc)

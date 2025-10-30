@@ -63,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=2.0,
         help="Typing speed multiplier (>1.0 is faster). Default 2.0 when --type typing",
     )
+    parser.add_argument(
+        "--thumbnail-style",
+        choices=["style1", "style2"],
+        help="Select thumbnail design style (style1=classic, style2=bold pop).",
+    )
     return parser
 
 
@@ -283,6 +288,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(args.config, project_root=Path.cwd())
+
+    if args.thumbnail_style:
+        try:
+            thumb_cfg = dict(config.raw.get("thumbnail", {})) if isinstance(config.raw, dict) else {}
+            thumb_cfg["style"] = args.thumbnail_style
+            config.raw.setdefault("thumbnail", {})
+            config.raw["thumbnail"].update(thumb_cfg)
+        except Exception:
+            logger.warning("Failed to apply --thumbnail-style override", exc_info=True)
 
     # Runtime override: expose overlay type to renderer via config
     try:

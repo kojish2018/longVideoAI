@@ -3,19 +3,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Optional, Tuple
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+
+from thumbnail_designs import (
+    ClassicThumbnailDesign,
+    Style2ThumbnailDesign,
+    ThumbnailContext,
+    ThumbnailDesign,
+)
+from thumbnail_designs.utils import fit_image
 
 from logging_utils import get_logger
 
 logger = get_logger(__name__)
-
-
-if hasattr(Image, "Resampling"):
-    _RESAMPLE = Image.Resampling.LANCZOS  # type: ignore[attr-defined]
-else:  # pragma: no cover - Pillow < 9.1 fallback
-    _RESAMPLE = Image.LANCZOS  # type: ignore[attr-defined]
 
 
 @dataclass
@@ -30,7 +32,7 @@ class ThumbnailSpec:
 
 
 class ThumbnailGenerator:
-    """Compose title band and hero image into a thumbnail."""
+    """Compose thumbnails using pluggable design implementations."""
 
     def __init__(self, config: Dict[str, object] | None = None) -> None:
         config = config or {}
@@ -71,6 +73,21 @@ class ThumbnailGenerator:
             fallback="fonts/NotoSansJP-Bold.ttf",
         )
 
+        style_name = str(thumb_cfg.get("style", "style1")).strip().lower() if thumb_cfg else "style1"
+        self.default_style = style_name or "style1"
+        self._designs = _build_design_registry()
+        if self.default_style not in self._designs:
+            logger.warning(
+                "Unknown configured thumbnail style '%s'; falling back to style1",
+                self.default_style,
+            )
+            self.default_style = "style1"
+
+    def available_styles(self) -> list[str]:
+        """Return the list of supported style identifiers."""
+
+        return sorted(self._designs.keys())
+
     def generate(
         self,
         *,
@@ -78,6 +95,7 @@ class ThumbnailGenerator:
         base_image: Optional[Path],
         output_name: str,
         subtitle: Optional[str] = None,
+        style: Optional[str] = None,
     ) -> Path:
         if not title:
             raise ValueError("Title is required for thumbnail generation")
@@ -85,47 +103,33 @@ class ThumbnailGenerator:
         self.thumbnail_directory.mkdir(parents=True, exist_ok=True)
         output_path = self.thumbnail_directory / output_name
 
-        canvas = Image.new("RGB", (self.spec.width, self.spec.height), "#000000")
-        top_band_height = max(
-            int(self.spec.height * self.spec.top_band_ratio),
-            int(self.spec.title_font_size * 1.6),
-        )
-        top_band = Image.new("RGB", (self.spec.width, top_band_height), "#000000")
-        canvas.paste(top_band, (0, 0))
-
-        hero_area_height = max(1, self.spec.height - top_band_height - self.spec.gap)
-        hero_box = (0, top_band_height + self.spec.gap)
-        hero_size = (self.spec.width, hero_area_height)
-        hero_image = self._prepare_hero_image(base_image, hero_size)
-        canvas.paste(hero_image, hero_box)
-
-        draw = ImageDraw.Draw(canvas)
-        title_font = ImageFont.truetype(str(self.title_font_path), size=self.spec.title_font_size)
-
-        title_lines, fitted_font = self._fit_text_lines(
-            title,
-            title_font,
-            self.title_font_path,
-            max_width=self.spec.width - 80,
-            max_lines=3,
+        design = self._resolve_design(style)
+        context = ThumbnailContext(
+            title=title,
+            subtitle=subtitle if design.supports_subtitle() else None,
+            base_image_path=base_image,
+            spec=self.spec,
+            title_font_path=self.title_font_path,
+            subtitle_font_path=self.subtitle_font_path,
+            prepare_hero_image=self._prepare_hero_image,
+            logger=logger,
         )
 
-        # Ignore subtitle usage (center title only in the top band)
-        subtitle_lines: Sequence[str] = []
-        subtitle_font = None
+        image = design.render(context)
+        image.save(output_path, format="PNG")
 
-        self._draw_text_block(
-            draw,
-            title_lines,
-            fitted_font,
-            subtitle_lines,
-            subtitle_font,
-            top_band_height,
-        )
-
-        canvas.save(output_path, format="PNG")
-        logger.info("Thumbnail saved: %s", output_path)
+        logger.info("Thumbnail saved: %s (style=%s)", output_path, design.name)
         return output_path
+
+    def _resolve_design(self, style: Optional[str]) -> ThumbnailDesign:
+        style_key = (style or self.default_style or "style1").strip().lower()
+        design = self._designs.get(style_key)
+        if design is None:
+            logger.warning("Unknown thumbnail style '%s'; falling back to style1", style_key)
+            design = self._designs.get("style1")
+            if design is None:  # pragma: no cover - defensive
+                raise ValueError("No thumbnail designs are registered")
+        return design
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -143,136 +147,16 @@ class ThumbnailGenerator:
                 logger.warning("Thumbnail hero image missing: %s", image_path)
             image = Image.new("RGB", target_size, "#202020")
 
-        fitted = _fit_image(image, target_size)
+        fitted = fit_image(image, target_size)
         if self.spec.overlay_rgba and self.spec.overlay_rgba[3] > 0:
             overlay = Image.new("RGBA", target_size, self.spec.overlay_rgba)
             fitted = Image.alpha_composite(fitted.convert("RGBA"), overlay).convert("RGB")
         return fitted
 
-    def _fit_text_lines(
-        self,
-        text: str,
-        font: ImageFont.FreeTypeFont,
-        font_path: Path,
-        *,
-        max_width: int,
-        max_lines: int,
-    ) -> Tuple[List[str], ImageFont.FreeTypeFont]:
-        lines = self._wrap_text(text, font, max_width)
-        current_font = font
-        attempts = 0
-        while (len(lines) > max_lines or _max_text_width(lines, current_font) > max_width) and attempts < 4:
-            new_size = max(24, int(current_font.size * 0.9))
-            current_font = ImageFont.truetype(str(font_path), size=new_size)
-            lines = self._wrap_text(text, current_font, max_width)
-            attempts += 1
-        if len(lines) > max_lines:
-            lines = _compress_lines(lines, max_lines)
-        return lines, current_font
 
-    def _wrap_text(
-        self,
-        text: str,
-        font: ImageFont.FreeTypeFont,
-        max_width: int,
-    ) -> List[str]:
-        if not text:
-            return [""]
-        lines: List[str] = []
-        buffer = ""
-        for char in text:
-            candidate = buffer + char
-            w, _ = _measure_text(font, candidate)
-            if w <= max_width:
-                buffer = candidate
-                continue
-            if buffer:
-                lines.append(buffer)
-                buffer = char
-            else:
-                lines.append(char)
-                buffer = ""
-        if buffer:
-            lines.append(buffer)
-        return lines
-
-    def _draw_text_block(
-        self,
-        draw: ImageDraw.ImageDraw,
-        title_lines: Sequence[str],
-        title_font: ImageFont.FreeTypeFont,
-        subtitle_lines: Sequence[str],
-        subtitle_font: Optional[ImageFont.FreeTypeFont],
-        top_band_height: int,
-    ) -> None:
-        padding_top = 0
-        line_spacing = int(title_font.size * 0.3)
-
-        block_height = sum(_measure_text(title_font, line)[1] for line in title_lines)
-        block_height += line_spacing * (len(title_lines) - 1 if title_lines else 0)
-
-        if subtitle_lines and subtitle_font:
-            block_height += int(title_font.size * 0.5)
-            block_height += sum(_measure_text(subtitle_font, line)[1] for line in subtitle_lines)
-            block_height += int(subtitle_font.size * 0.25) * (len(subtitle_lines) - 1)
-
-        y = max(0, (top_band_height - block_height) // 2)
-        for line in title_lines:
-            w, h = _measure_text(title_font, line)
-            draw.text(((self.spec.width - w) / 2, y), line, font=title_font, fill=(255, 255, 255))
-            y += h + line_spacing
-
-        if subtitle_lines and subtitle_font:
-            y += int(title_font.size * 0.2)
-            for line in subtitle_lines:
-                w, h = _measure_text(subtitle_font, line)
-                draw.text(((self.spec.width - w) / 2, y), line, font=subtitle_font, fill=(255, 255, 255))
-                y += h + int(subtitle_font.size * 0.25)
-
-
-def _fit_image(image: Image.Image, target: Tuple[int, int]) -> Image.Image:
-    target_w, target_h = target
-    if target_w <= 0 or target_h <= 0:
-        raise ValueError("Target size must be positive")
-
-    src_w, src_h = image.size
-    if src_w == 0 or src_h == 0:
-        return Image.new("RGB", target, "#202020")
-
-    scale = max(target_w / src_w, target_h / src_h)
-    new_size = (max(1, int(src_w * scale)), max(1, int(src_h * scale)))
-    resized = image.resize(new_size, _RESAMPLE)
-
-    left = max(0, (resized.width - target_w) // 2)
-    top = max(0, (resized.height - target_h) // 2)
-    right = left + target_w
-    bottom = top + target_h
-    return resized.crop((left, top, right, bottom))
-
-
-def _max_text_width(lines: Sequence[str], font: ImageFont.FreeTypeFont) -> int:
-    widths = [_measure_text(font, line)[0] for line in lines]
-    return max(widths) if widths else 0
-
-
-def _measure_text(font: ImageFont.FreeTypeFont, text: str) -> Tuple[int, int]:
-    try:
-        bbox = font.getbbox(text)
-        return bbox[2] - bbox[0], bbox[3] - bbox[1]
-    except AttributeError:  # pragma: no cover - very old Pillow
-        return font.getsize(text)
-
-
-def _compress_lines(lines: Sequence[str], max_lines: int) -> List[str]:
-    if max_lines <= 0:
-        return []
-    if len(lines) <= max_lines:
-        return list(lines)
-    compact = list(lines[: max_lines - 1])
-    compact.append("".join(lines[max_lines - 1 :]))
-    return compact
-
-
+def _build_design_registry() -> Dict[str, ThumbnailDesign]:
+    designs: list[ThumbnailDesign] = [ClassicThumbnailDesign(), Style2ThumbnailDesign()]
+    return {design.name.lower(): design for design in designs}
 def _parse_color(value: object | None) -> Optional[Tuple[int, int, int, int]]:
     if value is None:
         return None

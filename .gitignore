@@ -1,5 +1,6 @@
 # Local credentials (never commit real secrets)
 credentials/
+credentials_fire/
 config.yaml
 
 repo_clone/
