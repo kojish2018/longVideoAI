@@ -29,6 +29,7 @@ class VoicevoxClient:
         self.volume_scale = float(voice_cfg.get("volume_scale", 1.0) or 1.0)
         self.intonation_scale = float(voice_cfg.get("intonation_scale", 1.0) or 1.0)
         self.pitch_scale = float(voice_cfg.get("pitch_scale", 1.0) or 1.0)
+        self.profile = voice_cfg.get("profile", "default")
 
         raw_sampling_rate = voice_cfg.get("output_sampling_rate")
         try:
@@ -51,6 +52,14 @@ class VoicevoxClient:
 
         self.base_url = f"http://{self.host}:{self.port}"
         self._connection_verified = False
+
+        logger.info(
+            "VOICEVOX client initialised: profile=%s speaker_id=%s host=%s port=%s",
+            self.profile,
+            self.speaker_id,
+            self.host,
+            self.port,
+        )
 
     def ensure_ready(self) -> None:
         if self._connection_verified:

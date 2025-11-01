@@ -51,6 +51,7 @@ class YouTubeUploader:
 
     def __init__(self, *, config: Dict[str, Any], credentials_dir: Path) -> None:
         self._config = config.get("youtube", {}) if isinstance(config, dict) else {}
+        self._channel_name = str(self._config.get("channel", "default"))
         self._credentials_dir = credentials_dir
         self._credentials_path = credentials_dir / self._config.get(
             "credentials_file", "youtube_credentials.json"
@@ -82,7 +83,11 @@ class YouTubeUploader:
             self._resumable_max_retries = 5
 
         logger.info(
-            "YouTubeUploader 初期化: privacy=%s, category_id=%s", self._default_privacy, self._default_category
+            "YouTubeUploader 初期化: channel=%s, credentials_dir=%s, privacy=%s, category_id=%s",
+            self._channel_name,
+            self._credentials_dir,
+            self._default_privacy,
+            self._default_category,
         )
 
         if not _YOUTUBE_API_AVAILABLE:

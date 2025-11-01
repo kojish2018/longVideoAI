@@ -40,3 +40,60 @@ python long_video_main.py sample_txt/example.txt --thumbnail-style style2
 ```
 
 - 利用可能なスタイルは順次追加予定。`style1` が指定のない場合のデフォルト。
+
+## YouTube アップロードのチャンネル切り替え
+
+- `config.yaml` の `youtube.channel` で既定のチャンネルプロファイルを指定できます (デフォルトは `default`)。
+- チャンネルごとの認証情報は `youtube.channel_profiles` に定義し、必ずフォルダ・ファイルを分けて管理してください。
+
+```yaml
+youtube:
+	channel: "default"
+	channel_profiles:
+		default:
+			credentials_dir: "credentials"
+			credentials_file: "youtube_credentials.json"
+			token_file: "youtube_token.json"
+		fire:
+			credentials_dir: "credentials_fire"
+			credentials_file: "credentials-fire.json"
+			token_file: "youtube_token_fire.json"
+```
+
+- 実行時に別のチャンネルを使う場合は CLI で上書きできます:
+
+```bash
+python long_video_main.py sample_txt/example.txt --upload --youtube-channel fire
+```
+
+- 指定したチャンネルのフォルダに OAuth クライアント (`credentials-*.json`) とトークン (`youtube_token_*.json`) が保存され、互いに混ざらないよう自動で分離されます。
+
+## VOICEVOX 話者の切り替え
+
+- `config.yaml` の `apis.voicevox.profile` で既定の話者プロファイルを指定できます。
+- 複数の話者設定は `apis.voicevox_profiles` に定義し、話者 ID や速度・ピッチなどをプロファイル単位で管理します。
+
+```yaml
+apis:
+	voicevox:
+		profile: "default"
+	voicevox_profiles:
+		default:
+			speaker_id: 13
+		fire_male:
+			speaker_id: 3
+```
+
+- 実行時に別の話者を使う場合は CLI で上書きできます:
+
+```bash
+python long_video_main.py sample_txt/example.txt --voicevox-speaker 3
+```
+
+- プロファイル名で切り替える場合:
+
+```bash
+python long_video_main.py sample_txt/example.txt --voicevox-profile fire_male
+```
+
+- `--voicevox-speaker` と `--voicevox-profile` を併用した場合は、プロファイルで読み込んだ設定に対して話者 ID のみ明示的に上書きされます。

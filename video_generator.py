@@ -110,6 +110,31 @@ class VideoGenerator:
         self._font_cache: Dict[Tuple[int, bool], ImageFont.FreeTypeFont] = {}
         self._overlay_cache: Dict[Tuple[str, int, Tuple[str, ...]], Path] = {}
         self._opening_cache: Dict[Tuple[str, Tuple[str, ...]], Path] = {}
+        bgm_cfg = config.get("bgm", {}) if isinstance(config, dict) else {}
+        directory = str(bgm_cfg.get("directory", "background_music") or "background_music").strip()
+        self._bgm_directory = directory if directory else "background_music"
+        selected = str(bgm_cfg.get("selected", "Fulero.mp3") or "Fulero.mp3").strip()
+        if selected and not selected.lower().endswith(".mp3"):
+            selected = f"{selected}.mp3"
+        self._bgm_selected = selected
+
+    def _resolve_bgm_path(self) -> Optional[Path]:
+        if not self._bgm_selected:
+            return None
+
+        candidates: List[Path] = []
+        selected_path = Path(self._bgm_selected)
+        if not selected_path.is_absolute():
+            candidates.append(Path(self._bgm_directory) / self._bgm_selected)
+        candidates.append(selected_path)
+
+        for candidate in candidates:
+            try:
+                if candidate.exists():
+                    return candidate
+            except Exception:
+                continue
+        return None
 
     def render(
         self,
@@ -138,8 +163,8 @@ class VideoGenerator:
             # Volume: small (focus on narration) with gentle fade in/out
             # --------------------------------------------------------------
             try:
-                bgm_path = Path("background_music/Vandals.mp3")
-                if bgm_path.exists() and final_clip.audio is not None:
+                bgm_path = self._resolve_bgm_path()
+                if bgm_path and bgm_path.exists() and final_clip.audio is not None:
                     narration = final_clip.audio
                     bgm = AudioFileClip(str(bgm_path))
                     bgm = self._normalize_bgm_clip(bgm)
@@ -159,8 +184,12 @@ class VideoGenerator:
                     except Exception as exc_norm:  # pragma: no cover - safety net
                         logger.exception("Audio normalize failed, using unnormalized mix: %s", exc_norm)
                         final_clip = final_clip.set_audio(mixed)
-                elif not bgm_path.exists():
-                    logger.warning("BGM file not found: %s", bgm_path)
+                else:
+                    logger.warning(
+                        "BGM file not found or audio missing: selection=%s directory=%s",
+                        self._bgm_selected,
+                        self._bgm_directory,
+                    )
             except Exception as exc:  # pragma: no cover - safeguard audio pipeline
                 logger.exception("Failed to mix BGM: %s", exc)
             output_path.parent.mkdir(parents=True, exist_ok=True)

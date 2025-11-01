@@ -77,10 +77,16 @@ class LongFormPipeline:
         timeline = self.builder.build(document)
         asset_pipeline = AssetPipeline(run_dir=run_dir, config=self.config.raw)
 
-        scenes_output: List[SceneOutput] = []
-        current_start = 0.0
+        scene_assets: List[tuple[Scene, GeneratedAssets]] = []
         for scene in timeline.scenes:
             assets = asset_pipeline.prepare_scene_assets(scene)
+            scene_assets.append((scene, assets))
+
+        asset_pipeline.finalize_images([assets for _, assets in scene_assets])
+
+        scenes_output: List[SceneOutput] = []
+        current_start = 0.0
+        for scene, assets in scene_assets:
             scene_output = self._build_scene_output(
                 run_dir=run_dir,
                 scene=scene,

@@ -19,6 +19,19 @@ logger = get_logger(__name__)
 
 VOICE_CREDIT_LINE = "VOICEVOX: 青山龍星"
 
+DEFAULT_YOUTUBE_CHANNEL_PROFILES = {
+    "default": {
+        "credentials_dir": "credentials",
+        "credentials_file": "youtube_credentials.json",
+        "token_file": "youtube_token.json",
+    },
+    "fire": {
+        "credentials_dir": "credentials_fire",
+        "credentials_file": "credentials-fire.json",
+        "token_file": "youtube_token_fire.json",
+    },
+}
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Long-form video generation pipeline")
@@ -67,6 +80,32 @@ def build_parser() -> argparse.ArgumentParser:
         "--thumbnail-style",
         choices=["style1", "style2"],
         help="Select thumbnail design style (style1=classic, style2=bold pop).",
+    )
+    parser.add_argument(
+        "--voicevox-speaker",
+        type=int,
+        help="Override VOICEVOX speaker ID (example: 3 for Zundamon).",
+    )
+    parser.add_argument(
+        "--voicevox-profile",
+        help=(
+            "Select a VOICEVOX profile defined under apis.voicevox_profiles in config.yaml. "
+            "Falls back to the profile configured in config or 'default'."
+        ),
+    )
+    parser.add_argument(
+        "--background-music",
+        help=(
+            "Select background music filename. You can omit the .mp3 extension; "
+            "defaults to the configured value (Fulero.mp3)."
+        ),
+    )
+    parser.add_argument(
+        "--youtube-channel",
+        help=(
+            "Select YouTube channel profile to use for credentials. "
+            "Defaults to the profile configured in config.yaml or 'default'."
+        ),
     )
     return parser
 
@@ -283,11 +322,211 @@ def _to_rfc3339(dt: datetime) -> str:
     return dt_utc.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _apply_youtube_channel_profile(
+    *, config: AppConfig, requested_channel: Optional[str]
+) -> str:
+    if not isinstance(config.raw, dict):
+        raise ValueError("Configuration root must be a mapping to select YouTube channel.")
+
+    youtube_cfg = config.raw.setdefault("youtube", {})
+    if not isinstance(youtube_cfg, dict):
+        youtube_cfg = {}
+        config.raw["youtube"] = youtube_cfg
+
+    channel_profiles = _build_channel_profiles(youtube_cfg)
+
+    fallback_channel = youtube_cfg.get("channel") or youtube_cfg.get("default_channel") or "default"
+    channel_name = (requested_channel or fallback_channel or "default").strip()
+    if not channel_name:
+        channel_name = "default"
+
+    profile = channel_profiles.get(channel_name)
+    if not profile:
+        known = ", ".join(sorted(channel_profiles.keys())) or "(none)"
+        raise ValueError(
+            f"Unknown YouTube channel profile '{channel_name}'. Known profiles: {known}. "
+            "Define profiles under youtube.channel_profiles in config.yaml or use a supported name."
+        )
+
+    credentials_dir_name = profile.get("credentials_dir")
+    if not credentials_dir_name:
+        raise ValueError(f"Profile '{channel_name}' is missing 'credentials_dir'.")
+
+    credentials_dir = (config.project_root / credentials_dir_name).resolve()
+    config.credentials_dir = credentials_dir
+
+    credentials_file = profile.get("credentials_file") or DEFAULT_YOUTUBE_CHANNEL_PROFILES["default"][
+        "credentials_file"
+    ]
+    token_file = profile.get("token_file") or DEFAULT_YOUTUBE_CHANNEL_PROFILES["default"]["token_file"]
+
+    youtube_cfg["credentials_file"] = credentials_file
+    youtube_cfg["token_file"] = token_file
+    youtube_cfg["channel"] = channel_name
+
+    return channel_name
+
+
+def _build_channel_profiles(youtube_cfg: dict) -> dict:
+    profiles = {key: dict(value) for key, value in DEFAULT_YOUTUBE_CHANNEL_PROFILES.items()}
+
+    user_profiles = youtube_cfg.get("channel_profiles") if isinstance(youtube_cfg, dict) else {}
+    if isinstance(user_profiles, dict):
+        for name, profile in user_profiles.items():
+            if not isinstance(profile, dict):
+                continue
+            base = profiles.get(name, {})
+            merged = dict(base)
+            merged.update({k: v for k, v in profile.items() if v is not None})
+            profiles[name] = merged
+
+    return profiles
+
+
+def _normalise_bgm_name(value: str) -> str:
+    trimmed = str(value).strip()
+    if not trimmed:
+        raise ValueError("Background music name cannot be empty.")
+    if not trimmed.lower().endswith(".mp3"):
+        trimmed = f"{trimmed}.mp3"
+    return trimmed
+
+
+def _apply_background_music(*, config: AppConfig, override: Optional[str]) -> str:
+    if not isinstance(config.raw, dict):
+        raise ValueError("Configuration root must be a mapping to select background music.")
+
+    bgm_cfg = config.raw.setdefault("bgm", {})
+    if not isinstance(bgm_cfg, dict):
+        bgm_cfg = {}
+        config.raw["bgm"] = bgm_cfg
+
+    directory = str(bgm_cfg.get("directory") or "background_music").strip()
+    if not directory:
+        directory = "background_music"
+    bgm_cfg["directory"] = directory
+
+    if override:
+        selected = _normalise_bgm_name(override)
+    else:
+        selected_raw = bgm_cfg.get("selected") or "Fulero.mp3"
+        selected = _normalise_bgm_name(str(selected_raw))
+
+    bgm_cfg["selected"] = selected
+    return selected
+
+
+def _apply_voicevox_profile(
+    *, config: AppConfig, requested_profile: Optional[str], speaker_override: Optional[int]
+) -> tuple[str, int]:
+    if not isinstance(config.raw, dict):
+        raise ValueError("Configuration root must be a mapping to select VOICEVOX profile.")
+
+    apis_cfg = config.raw.setdefault("apis", {})
+    if not isinstance(apis_cfg, dict):
+        raise ValueError("'apis' section must be a mapping to configure VOICEVOX.")
+
+    voice_cfg = apis_cfg.setdefault("voicevox", {})
+    if not isinstance(voice_cfg, dict):
+        voice_cfg = {}
+        apis_cfg["voicevox"] = voice_cfg
+
+    base_profile = {
+        key: value
+        for key, value in voice_cfg.items()
+        if key not in {"profile"}
+    }
+
+    profiles: dict[str, dict] = {"default": dict(base_profile)}
+    profiles_cfg = apis_cfg.get("voicevox_profiles")
+    if isinstance(profiles_cfg, dict):
+        for name, profile in profiles_cfg.items():
+            if not isinstance(profile, dict):
+                continue
+            merged = dict(base_profile)
+            merged.update({k: v for k, v in profile.items() if v is not None})
+            profiles[name] = merged
+
+    profile_name = (requested_profile or voice_cfg.get("profile") or "default").strip()
+    if not profile_name:
+        profile_name = "default"
+
+    if profile_name not in profiles:
+        known = ", ".join(sorted(profiles.keys())) or "(none)"
+        raise ValueError(
+            f"Unknown VOICEVOX profile '{profile_name}'. Known profiles: {known}. "
+            "Define profiles under apis.voicevox_profiles in config.yaml or use a supported name."
+        )
+
+    selected_profile = profiles[profile_name]
+    voice_cfg.update(selected_profile)
+    voice_cfg["profile"] = profile_name
+
+    if speaker_override is not None:
+        try:
+            voice_cfg["speaker_id"] = int(speaker_override)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("--voicevox-speaker must be an integer speaker ID") from exc
+
+    if "speaker_id" not in voice_cfg:
+        raise ValueError(f"VOICEVOX profile '{profile_name}' must define speaker_id.")
+
+    speaker_id = int(voice_cfg["speaker_id"])
+    return profile_name, speaker_id
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    bgm_override: Optional[str] = None
+    if getattr(args, "background_music", None):
+        try:
+            bgm_override = _normalise_bgm_name(args.background_music)
+        except ValueError as exc:
+            parser.error(str(exc))
+
+
+    # fireチャンネル指定時のデフォルト値自動適用
+    if getattr(args, "youtube_channel", None) == "fire":
+        if getattr(args, "voicevox_speaker", None) is None:
+            args.voicevox_speaker = 8
+        if not hasattr(args, "overlay_type") or args.overlay_type is None or args.overlay_type == "static":
+            args.overlay_type = "typing"
+        if getattr(args, "thumbnail_style", None) is None:
+            args.thumbnail_style = "style2"
+        if bgm_override is None:
+            bgm_override = "Alge.mp3"
+
     config = load_config(args.config, project_root=Path.cwd())
+
+    try:
+        selected_channel = _apply_youtube_channel_profile(
+            config=config,
+            requested_channel=args.youtube_channel,
+        )
+        logger.info("YouTube channel profile: %s", selected_channel)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    try:
+        voice_profile, speaker_id = _apply_voicevox_profile(
+            config=config,
+            requested_profile=args.voicevox_profile,
+            speaker_override=args.voicevox_speaker,
+        )
+        logger.info("VOICEVOX profile resolved: %s (speaker_id=%s)", voice_profile, speaker_id)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    try:
+        selected_bgm = _apply_background_music(
+            config=config,
+            override=bgm_override,
+        )
+        logger.info("Background music selected: %s", selected_bgm)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     if args.thumbnail_style:
         try:

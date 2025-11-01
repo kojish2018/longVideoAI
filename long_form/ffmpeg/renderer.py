@@ -97,6 +97,13 @@ class FFmpegVideoGenerator:
         self._font_cache: Dict[Tuple[int, bool], ImageFont.FreeTypeFont] = {}
         self._overlay_cache: Dict[Tuple[str, int, Tuple[str, ...]], Path] = {}
         self._opening_cache: Dict[Tuple[str, Tuple[str, ...]], Path] = {}
+        bgm_cfg = config.get("bgm", {}) if isinstance(config, dict) else {}
+        directory = str(bgm_cfg.get("directory", "background_music") or "background_music").strip()
+        self._bgm_directory = directory if directory else "background_music"
+        selected = str(bgm_cfg.get("selected", "Fulero.mp3") or "Fulero.mp3").strip()
+        if selected and not selected.lower().endswith(".mp3"):
+            selected = f"{selected}.mp3"
+        self._bgm_selected = selected
         # Overlay/text effect mode from runtime config (default: static)
         overlay_cfg = config.get("overlay", {}) if isinstance(config, dict) else {}
         try:
@@ -543,8 +550,8 @@ class FFmpegVideoGenerator:
 
     def _mix_bgm(self, input_video: Path, output_path: Path, *, total_duration: float) -> Path:
         cfg = self.render_cfg
-        bgm_file = Path("background_music/Vandals.mp3")
-        if not bgm_file.exists():
+        bgm_path = self._resolve_bgm_path()
+        if bgm_path is None or not bgm_path.exists():
             # Fast path: just move/copy streams with faststart
             args = ["-i", str(input_video), "-c", "copy", "-movflags", "+faststart", "-y", str(output_path)]
             # Show a single bar for the final write (MoviePy-like)
@@ -556,7 +563,7 @@ class FFmpegVideoGenerator:
         fade_out_st = max(total_duration - 1.0, 0.0)
         logger.info(
             "BGM mix: file=%s, total=%.2fs, fade_out_at=%.2fs, bgm_gain=%.2f, stereo=%s",
-            bgm_file,
+            bgm_path,
             total_duration,
             fade_out_st,
             0.24,
@@ -582,7 +589,7 @@ class FFmpegVideoGenerator:
             "-stream_loop",
             "-1",
             "-i",
-            str(bgm_file),
+            str(bgm_path),
             "-filter_complex",
             filter_complex,
             "-map",
@@ -604,6 +611,29 @@ class FFmpegVideoGenerator:
         # Display a single overall bar on the final write step (MoviePy-like)
         run_ffmpeg_stream(args, expected_duration_sec=total_duration, label="Render")
         return output_path
+
+    def _resolve_bgm_path(self) -> Optional[Path]:
+        if not getattr(self, "_bgm_selected", None):
+            return None
+
+        candidates: List[Path] = []
+        selected_path = Path(self._bgm_selected)
+        if not selected_path.is_absolute():
+            candidates.append(Path(self._bgm_directory) / self._bgm_selected)
+        candidates.append(selected_path)
+
+        for candidate in candidates:
+            try:
+                if candidate.exists():
+                    return candidate
+            except Exception:
+                continue
+        logger.warning(
+            "BGM file not found; falling back to passthrough. selection=%s directory=%s",
+            self._bgm_selected,
+            self._bgm_directory,
+        )
+        return None
 
     # Overlay image helpers ---------------------------------------------
     def _get_font(self, size: int, bold: bool = False) -> ImageFont.FreeTypeFont:

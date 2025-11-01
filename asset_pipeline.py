@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 from logging_utils import get_logger
 from PIL import Image
 import random
+import shutil
 from pollinations_client import PollinationsClient
 from prompt_translator import PromptTranslator
 from timeline_builder import Scene, SceneChunk, SceneType
@@ -37,6 +38,7 @@ class GeneratedAssets:
     image_prompt_path: Optional[Path]
     image_prompt_text: Optional[str]
     segments: List[NarrationSegment]
+    scene_id: str
 
 
 @dataclass
@@ -101,6 +103,8 @@ class AssetPipeline:
         self.chunk_dir.mkdir(parents=True, exist_ok=True)
 
         self._image_cache: Dict[str, Path] = {}
+        self._failed_image_targets: Dict[str, Path] = {}
+        self._successful_images: List[Path] = []
 
     def prepare_scene_assets(self, scene: Scene) -> GeneratedAssets:
         narration_path = self.audio_dir / f"{scene.scene_id}.wav"
@@ -148,6 +152,7 @@ class AssetPipeline:
             image_prompt_path=prompt_path,
             image_prompt_text=prompt_text,
             segments=segments,
+            scene_id=scene.scene_id,
         )
 
     # ------------------------------------------------------------------
@@ -250,7 +255,7 @@ class AssetPipeline:
         fragments = [part.strip() for part in text.splitlines()]
         return " ".join(fragment for fragment in fragments if fragment)
 
-    def _get_or_create_image(self, scene_id: str, prompt: str) -> Path:
+    def _get_or_create_image(self, scene_id: str, prompt: str) -> Optional[Path]:
         if scene_id in self._image_cache:
             return self._image_cache[scene_id]
 
@@ -258,9 +263,61 @@ class AssetPipeline:
         existing = self.image_client.fetch(prompt, output_path)
         if existing:
             self._image_cache[scene_id] = existing
+            if existing not in self._successful_images:
+                self._successful_images.append(existing)
             return existing
 
-        # Fallback: choose a default image from project root if available
+        self._failed_image_targets[scene_id] = output_path
+        logger.warning("Pollinations image missing for %s; deferring fallback", scene_id)
+        return None
+
+    def finalize_images(self, assets: List[GeneratedAssets]) -> None:
+        if not self._failed_image_targets:
+            return
+
+        pool: List[Path] = [path for path in self._successful_images if path.exists()]
+        for asset in assets:
+            if asset.scene_id not in self._failed_image_targets:
+                continue
+
+            target_path = self._failed_image_targets[asset.scene_id]
+
+            if pool:
+                source_path = random.choice(pool)
+                self._duplicate_image(source_path, target_path)
+                logger.info(
+                    "Filled missing image for %s using generated asset %s",
+                    asset.scene_id,
+                    source_path.name,
+                )
+            else:
+                self._populate_from_defaults(asset.scene_id, target_path)
+
+            asset.image_path = target_path
+            self._image_cache[asset.scene_id] = target_path
+            if target_path.exists():
+                pool.append(target_path)
+                if target_path not in self._successful_images:
+                    self._successful_images.append(target_path)
+
+        self._failed_image_targets.clear()
+
+    def _duplicate_image(self, source: Path, target: Path) -> None:
+        if source == target:
+            return
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        except Exception:
+            try:
+                img = Image.open(source).convert("RGB")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                img.save(target, format="JPEG", quality=90)
+            except Exception as exc:  # pragma: no cover - file issues
+                logger.error("Failed to duplicate image %s -> %s: %s", source, target, exc)
+
+    def _populate_from_defaults(self, scene_id: str, target_path: Path) -> Path:
         project_root = self.run_dir.parent.parent
         default_dir = project_root / "default_img"
         candidates: List[Path] = []
@@ -272,24 +329,21 @@ class AssetPipeline:
             choice = random.choice(candidates)
             try:
                 img = Image.open(choice).convert("RGB")
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                img.save(output_path, format="JPEG", quality=90)
-                logger.info("Using fallback default image: %s -> %s", choice.name, output_path.name)
-                self._image_cache[scene_id] = output_path
-                return output_path
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                img.save(target_path, format="JPEG", quality=90)
+                logger.info("Using fallback default image: %s -> %s", choice.name, target_path.name)
+                return target_path
             except Exception as exc:  # pragma: no cover - file issues
                 logger.warning("Failed to use default image %s: %s", choice, exc)
 
-        # Last resort: create a plain placeholder to keep pipeline moving
         try:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
             placeholder = Image.new("RGB", (self.image_client.width, self.image_client.height), (32, 32, 32))
-            placeholder.save(output_path, format="JPEG", quality=85)
+            placeholder.save(target_path, format="JPEG", quality=85)
             logger.warning("No default images found; wrote placeholder for %s", scene_id)
         except Exception as exc:  # pragma: no cover
             logger.error("Failed to write placeholder image for %s: %s", scene_id, exc)
-        self._image_cache[scene_id] = output_path
-        return output_path
+        return target_path
 
     def _write_prompt_metadata(
         self,
