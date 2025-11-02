@@ -1,0 +1,69 @@
+{
+  "title": "プレゼン型MVPテスト",
+  "tags": ["プレゼンMVP", "テストラン"],
+  "description": "プレゼンモードのテスト用サンプル。およそ1分の構成です。",
+  "character": {
+    "image_path": "../assets/character_rabbit.png",
+    "position": { "x": 1240, "y": 280 },
+    "scale": 0.95
+  },
+  "background_defaults": {
+    "prompt": "cozy pastel home office, flat illustration, soft lighting, wide angle, 16:9",
+    "change_interval_seconds": 120
+  },
+  "scenes": [
+    {
+      "id": "S001",
+      "narration": "ようこそ。今日はプレゼン型の自動生成ワークフローをお試しで紹介します。左側に要点をまとめ、右側にはキャラクターを表示する構成です。",
+      "panel": {
+        "title": "MVPの目的",
+        "body": [
+          "ロング動画向けの新レイアウト検証",
+          "JSON台本で柔軟に制御",
+          "既存パイプライン資産を活用"
+        ],
+        "conclusion": "まずは1分程度の短い台本で確認します。"
+      }
+    },
+    {
+      "id": "S002",
+      "narration": "パネルのテキストはJSONで指定します。タイトルと本文、そして結論を分けて記述するだけで、指定のテンプレートに自動的に収まります。",
+      "panel": {
+        "title": "パネル入力の要点",
+        "body": [
+          "タイトルは短く強調表示",
+          "本文は箇条書きで整理",
+          "必要なら結論を補足"
+        ],
+        "conclusion": "フォントサイズはオーバーライドも可能です。"
+      },
+      "background_prompt": "minimalist office interior, pastel colors, warm light, 16:9 illustration"
+    },
+    {
+      "id": "S003",
+      "narration": "ナレーションはVOICEVOXが担当し、字幕は自動的に生成されます。黒帯を敷かず、フォントアウトラインだけで読みやすく仕上げます。",
+      "panel": {
+        "title": "音声と字幕",
+        "body": [
+          "VOICEVOXで各チャンクを合成",
+          "字幕はASS形式で書き出し",
+          "タイムコードは音声長に同期"
+        ],
+        "conclusion": "翻訳が必要なら既存のDeepLクライアントを活用できます。"
+      }
+    },
+    {
+      "id": "S004",
+      "narration": "最後に、Pollinationsで生成した背景をシーンごとにオーバーレイし、FFmpegで動画を連結します。これでプレゼン型MVPの完成です。",
+      "panel": {
+        "title": "レンダリングの流れ",
+        "body": [
+          "パネルPNGとキャラクターを合成",
+          "背景は約2分周期で更新",
+          "シーン動画を連結して完成"
+        ],
+        "conclusion": "この構成をベースに拡張していきましょう。"
+      }
+    }
+  ]
+}
