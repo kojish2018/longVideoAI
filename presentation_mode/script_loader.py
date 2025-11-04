@@ -98,12 +98,23 @@ def _parse_scene(raw: Dict[str, Any], *, index: int) -> PresentationScene:
     if subtitle_override is not None and not isinstance(subtitle_override, str):
         raise ValueError(f"Scene {scene_id} subtitle_override must be a string if set")
 
+    subtitle_lines_raw = raw.get("subtitle_lines")
+    if subtitle_lines_raw is not None:
+        if not isinstance(subtitle_lines_raw, (list, tuple)):
+            raise ValueError(f"Scene {scene_id} subtitle_lines must be an array of strings")
+        subtitle_lines = _ensure_str_list("subtitle_lines", subtitle_lines_raw)
+        if not subtitle_lines:
+            subtitle_lines = None
+    else:
+        subtitle_lines = None
+
     return PresentationScene(
         scene_id=scene_id,
         narration=narration.strip(),
         panel=panel,
         background_prompt=background_prompt.strip() if isinstance(background_prompt, str) and background_prompt.strip() else None,
         subtitle_override=subtitle_override.strip() if isinstance(subtitle_override, str) and subtitle_override.strip() else None,
+        subtitle_lines=subtitle_lines,
     )
 
 
@@ -229,4 +240,3 @@ def load_presentation_script(path: Path | str) -> PresentationScript:
         character=character,
         background_defaults=bg_defaults,
     )
-

@@ -11,6 +11,7 @@ from long_form.ffmpeg.concat import concat_mp4_streamcopy
 from long_form.ffmpeg.runner import run_ffmpeg
 
 from .assets_pipeline import SceneAssets
+from .bgm import PresentationBgmMixer
 from .models import CharacterPlacement
 
 logger = get_logger(__name__)
@@ -58,6 +59,7 @@ class PresentationRenderer:
                 int(panel_cfg.get("y", 0)),
             ),
         )
+        self.bgm_mixer = PresentationBgmMixer(config)
 
     def render(
         self,
@@ -77,8 +79,25 @@ class PresentationRenderer:
             self._render_scene(scene_output, assets, character)
             rendered_paths.append(scene_output)
 
-        final_path = output_path
-        concat_mp4_streamcopy(rendered_paths, final_path)
+        concat_path = run_dir / "presentation_concat.mp4"
+        concat_mp4_streamcopy(rendered_paths, concat_path)
+
+        total_duration = sum(asset.duration for asset in scene_assets)
+        final_path = self.bgm_mixer.mix(
+            concat_path,
+            output_path,
+            total_duration=total_duration,
+            audio_codec=self.cfg.audio_codec,
+            audio_sample_rate=self.cfg.audio_sample_rate,
+            audio_bitrate=self.cfg.audio_bitrate,
+        )
+
+        if final_path != concat_path and concat_path.exists():
+            try:
+                concat_path.unlink()
+            except Exception:
+                logger.warning("Failed to delete temporary concatenated file: %s", concat_path)
+
         return final_path
 
     # ------------------------------------------------------------------
@@ -92,6 +111,11 @@ class PresentationRenderer:
         cfg = self.cfg
         panel_width, panel_height = _read_panel_size(assets.panel_image_path)
         panel_x, panel_y = cfg.panel_position
+
+        bg_scale_factor = 1.10
+        bg_scaled_width = max(1, int(round(cfg.width * bg_scale_factor)))
+        bg_scaled_height = max(1, int(round(cfg.height * bg_scale_factor)))
+        bg_crop_x = max(0, (bg_scaled_width - cfg.width) // 2)
 
         input_args: List[str] = [
             "-loop",
@@ -129,7 +153,8 @@ class PresentationRenderer:
         ]
 
         filter_parts: List[str] = [
-            f"[0:v]scale={cfg.width}:{cfg.height}:flags=bicubic,format=rgba[bg]",
+            f"[0:v]scale={bg_scaled_width}:{bg_scaled_height}:flags=bicubic,"
+            f"crop={cfg.width}:{cfg.height}:{bg_crop_x}:0,format=rgba[bg]",
             f"[1:v]scale={panel_width}:{panel_height}[panel_scaled]",
             "[panel_scaled]format=rgba[panel]",
             f"[bg][panel]overlay={panel_x}:{panel_y}[layer1]",

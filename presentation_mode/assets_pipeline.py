@@ -10,12 +10,12 @@ from logging_utils import get_logger
 from pollinations_client import PollinationsClient
 from prompt_translator import PromptTranslator
 from speech_sanitizer import sanitize_for_voicevox
-from voicevox_client import VoicevoxClient
 
 from .models import PresentationScene, PresentationScript
-from .panel_renderer import PanelRenderer
+from .panel_renderer import DEFAULT_LAYOUT, PanelRenderer, PanelTheme, scale_layout
 from .subtitles import SubtitleLine, write_ass_subtitles
 from .utils import hex_to_rgb, stable_hash
+from .voicevox_adapter import PresentationVoicevoxClient
 
 logger = get_logger(__name__)
 
@@ -103,11 +103,10 @@ class PresentationAssetPipeline:
         self.run_dir = run_dir
         self.config = config
         self.audio_dir = run_dir / "audio"
-        self.chunk_dir = self.audio_dir / "chunks"
         self.panel_dir = run_dir / "panel_layers"
         self.subtitles_dir = run_dir / "subtitles"
 
-        for directory in (self.audio_dir, self.chunk_dir, self.panel_dir, self.subtitles_dir):
+        for directory in (self.audio_dir, self.panel_dir, self.subtitles_dir):
             directory.mkdir(parents=True, exist_ok=True)
 
         text_cfg = config.get("text", {}) if isinstance(config, dict) else {}
@@ -116,22 +115,48 @@ class PresentationAssetPipeline:
         body_size = int(text_cfg.get("body_size_override", 52)) if isinstance(text_cfg, dict) else 52
         conclusion_size = int(text_cfg.get("conclusion_size_override", 58)) if isinstance(text_cfg, dict) else 58
 
-        template_path = Path(__file__).resolve().parent / "assets" / "panel_base.png"
+        template_default = Path(__file__).resolve().parent / "assets" / "panel_base.png"
+        panel_cfg = config.get("presentation_panel", {}) if isinstance(config, dict) else {}
+        theme_cfg = panel_cfg.get("theme", {}) if isinstance(panel_cfg, dict) else {}
+        theme = PanelTheme.from_dict(theme_cfg)
+
+        use_template = True
+        if isinstance(panel_cfg, dict) and "use_template" in panel_cfg:
+            use_template = bool(panel_cfg.get("use_template", True))
+        template_path = template_default if use_template and template_default.exists() else None
+
+        panel_text_color = (
+            hex_to_rgb(panel_cfg.get("text_color"), (40, 40, 40))
+            if isinstance(panel_cfg, dict)
+            else (40, 40, 40)
+        )
+        panel_accent_color = (
+            hex_to_rgb(panel_cfg.get("accent_color"), (255, 80, 160))
+            if isinstance(panel_cfg, dict)
+            else (255, 80, 160)
+        )
+
+        video_width, video_height = self._video_resolution()
+        panel_width = max(1, int(round(video_width * 0.65)))
+        panel_height = max(1, int(round(video_height * 0.82)))
+        panel_layout = scale_layout(DEFAULT_LAYOUT, panel_width, panel_height)
 
         self.panel_renderer = PanelRenderer(
-            template_path=template_path if template_path.exists() else None,
+            template_path=template_path,
+            layout=panel_layout,
             font_path=text_cfg.get("font_path"),
             title_size=title_size,
             body_size=body_size,
             conclusion_size=conclusion_size,
-            text_color=hex_to_rgb(colors.get("default"), (40, 40, 40)),
-            accent_color=hex_to_rgb(colors.get("highlight"), (255, 80, 160)),
+            text_color=panel_text_color,
+            accent_color=panel_accent_color,
+            theme=theme,
         )
 
         self.sub_font_name = str(text_cfg.get("font_family", "Noto Sans JP"))
         self.sub_font_size = max(36, int(text_cfg.get("subtitle_size_override", 48)))
 
-        self.voice_client = VoicevoxClient(config)
+        self.voice_client = PresentationVoicevoxClient(config)
         self.translator = PromptTranslator(config)
         self.backgrounds = BackgroundManager(run_dir=run_dir, config=config, translator=self.translator)
 
@@ -141,11 +166,8 @@ class PresentationAssetPipeline:
 
         for index, scene in enumerate(script.scenes):
             logger.info("Generating assets for scene %s", scene.scene_id)
-            subtitle_lines = self._segment_text(scene)
-            if not subtitle_lines:
-                subtitle_lines = [scene.narration.strip()]
-
-            audio_path, duration, segments = self._synthesize_audio(scene, subtitle_lines)
+            display_lines = self._resolve_subtitle_lines(scene)
+            audio_path, duration, segments = self._synthesize_scene_audio(scene, display_lines)
 
             subtitles_path = self._build_subtitles(scene, segments, resolution=self._video_resolution())
             panel_path = self._render_panel(scene, index)
@@ -179,8 +201,15 @@ class PresentationAssetPipeline:
             int(video_cfg.get("height", 1080)),
         )
 
-    def _segment_text(self, scene: PresentationScene) -> List[str]:
+    def _resolve_subtitle_lines(self, scene: PresentationScene) -> List[str]:
+        if scene.subtitle_lines:
+            lines = [line.strip() for line in scene.subtitle_lines if line and line.strip()]
+            if lines:
+                return lines
         source = scene.subtitle_override or scene.narration
+        return self._segment_text(source)
+
+    def _segment_text(self, source: str) -> List[str]:
         normalized = source.strip()
         if not normalized:
             return []
@@ -211,70 +240,53 @@ class PresentationAssetPipeline:
             segments.append(buffer.strip())
         return [seg for seg in segments if seg]
 
-    def _synthesize_audio(
+    def _synthesize_scene_audio(
         self,
         scene: PresentationScene,
-        segments_text: Sequence[str],
+        subtitle_texts: Sequence[str],
     ) -> Tuple[Path, float, Tuple[SubtitleLine, ...]]:
-        chunk_paths: List[Path] = []
-        chunk_durations: List[float] = []
+        output_path = self.audio_dir / f"{scene.scene_id}.wav"
+        narration_text = scene.narration.strip() or "。"
+        sanitized_narration = sanitize_for_voicevox(narration_text)
+        if not sanitized_narration.strip():
+            sanitized_narration = "。"
+
+        primary_query = self.voice_client.create_audio_query(sanitized_narration)
+        if primary_query:
+            audio_path, total_duration = self.voice_client.synthesize_from_query(primary_query, output_path)
+            duration_estimates = self._estimate_line_durations(subtitle_texts)
+            durations = self._fit_durations(duration_estimates, total_duration, subtitle_texts)
+        else:
+            audio_path, total_duration = self.voice_client.synthesize(sanitized_narration, output_path)
+            durations = self._allocate_by_ratio(subtitle_texts, total_duration)
+
         subtitle_lines: List[SubtitleLine] = []
         current_offset = 0.0
-
-        for idx, line in enumerate(segments_text, start=1):
-            sanitized = sanitize_for_voicevox(line)
-            chunk_path = self.chunk_dir / f"{scene.scene_id}_{idx:02d}.wav"
-            audio_path, duration = self.voice_client.synthesize(sanitized, chunk_path)
-            chunk_paths.append(audio_path)
-            chunk_durations.append(duration)
+        if not subtitle_texts:
             subtitle_lines.append(
                 SubtitleLine(
-                    index=idx,
-                    start=current_offset,
-                    duration=duration,
-                    text=line.strip(),
+                    index=1,
+                    start=0.0,
+                    duration=total_duration or 1.0,
+                    text=scene.narration.strip(),
                 )
             )
-            current_offset += duration
-
-        if not chunk_paths:
-            # Fallback: write silence
-            empty_path = self.audio_dir / f"{scene.scene_id}.wav"
-            _, duration = self.voice_client.synthesize("。", empty_path)  # minimal audio
-            fallback_duration = duration or 1.0
-            return empty_path, fallback_duration, tuple(
-                [
+        else:
+            for idx, (line, duration) in enumerate(zip(subtitle_texts, durations), start=1):
+                clean_line = line.strip()
+                dur = max(duration, 0.05)
+                subtitle_lines.append(
                     SubtitleLine(
-                        index=1,
-                        start=0.0,
-                        duration=fallback_duration,
-                        text="",
+                        index=idx,
+                        start=current_offset,
+                        duration=dur,
+                        text=clean_line,
                     )
-                ]
-            )
+                )
+                current_offset += dur
 
-        output_path = self.audio_dir / f"{scene.scene_id}.wav"
-        self._concatenate_wavs(chunk_paths, output_path)
-        total_duration = sum(chunk_durations)
-        return output_path, total_duration, tuple(subtitle_lines)
-
-    def _concatenate_wavs(self, chunk_paths: Sequence[Path], output_path: Path) -> None:
-        import wave
-
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        params = None
-        frames: List[bytes] = []
-        for path in chunk_paths:
-            with wave.open(str(path), "rb") as wav_file:
-                params = wav_file.getparams()
-                frames.append(wav_file.readframes(wav_file.getnframes()))
-        if params is None:
-            raise RuntimeError("No WAV parameters found during concatenation")
-
-        with wave.open(str(output_path), "wb") as wav_file:
-            wav_file.setparams(params)
-            for frame in frames:
-                wav_file.writeframes(frame)
+        total_duration = subtitle_lines[-1].end if subtitle_lines else total_duration
+        return audio_path, total_duration, tuple(subtitle_lines)
 
     def _build_subtitles(
         self,
@@ -295,3 +307,71 @@ class PresentationAssetPipeline:
     def _render_panel(self, scene: PresentationScene, index: int) -> Path:
         output_path = self.panel_dir / f"{index:03d}_{scene.scene_id}.png"
         return self.panel_renderer.render(scene.panel, output_path)
+
+    # ------------------------------------------------------------------
+
+    def _estimate_line_durations(self, lines: Sequence[str]) -> Optional[List[float]]:
+        if not lines:
+            return None
+        estimates: List[float] = []
+        for line in lines:
+            sanitized = sanitize_for_voicevox(line)
+            if not sanitized.strip():
+                estimates.append(0.2)
+                continue
+            query = self.voice_client.create_audio_query(sanitized)
+            if not query:
+                return None
+            duration = self.voice_client.estimate_duration_from_query(query)
+            if duration <= 0.0:
+                duration = max(len(sanitized) * 0.05, 0.3)
+            estimates.append(duration)
+        return estimates
+
+    def _fit_durations(
+        self,
+        raw_durations: Optional[Sequence[float]],
+        total_duration: float,
+        lines: Sequence[str],
+    ) -> List[float]:
+        if not lines:
+            return []
+        if raw_durations:
+            total_estimate = sum(raw_durations)
+            if total_estimate > 0:
+                scaled = [max(d, 0.05) for d in raw_durations]
+                return self._normalize_duration_sum(scaled, total_duration)
+        return self._allocate_by_ratio(lines, total_duration)
+
+    def _allocate_by_ratio(self, lines: Sequence[str], total_duration: float) -> List[float]:
+        if not lines:
+            return []
+        sanitized = [sanitize_for_voicevox(line) for line in lines]
+        char_counts = [len(s) if len(s) > 0 else 1 for s in sanitized]
+        total_chars = sum(char_counts)
+        if total_chars <= 0:
+            share = total_duration / len(lines) if lines else 0.0
+            return [share for _ in lines]
+
+        durations: List[float] = []
+        for count in char_counts:
+            portion = (count / total_chars) * total_duration
+            durations.append(max(portion, 0.05))
+        return self._normalize_duration_sum(durations, total_duration)
+
+    def _normalize_duration_sum(self, durations: Sequence[float], total_duration: float) -> List[float]:
+        if not durations:
+            return []
+        total = sum(durations)
+        if total <= 0:
+            share = total_duration / len(durations) if durations else 0.0
+            return [share for _ in durations]
+        scale = total_duration / total
+        normalized = [d * scale for d in durations]
+        normalized = [max(d, 0.01) for d in normalized]
+        adjusted_total = sum(normalized)
+        if adjusted_total <= 0:
+            share = total_duration / len(normalized) if normalized else 0.0
+            return [share for _ in normalized]
+        secondary_scale = total_duration / adjusted_total
+        return [d * secondary_scale for d in normalized]

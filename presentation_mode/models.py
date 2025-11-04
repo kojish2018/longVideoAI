@@ -34,6 +34,7 @@ class PresentationScene:
     panel: PanelContent
     background_prompt: Optional[str] = None
     subtitle_override: Optional[str] = None
+    subtitle_lines: Optional[Tuple[str, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -61,4 +62,3 @@ class PresentationScript:
 
     def change_interval(self) -> int:
         return max(30, self.background_defaults.change_interval_seconds)
-

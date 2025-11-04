@@ -75,7 +75,11 @@
             "additionalProperties": false
           },
           "background_prompt": { "type": "string" },
-          "subtitle_override": { "type": "string" }
+          "subtitle_override": { "type": "string" },
+          "subtitle_lines": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
         },
         "additionalProperties": false
       }
