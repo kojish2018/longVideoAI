@@ -292,7 +292,7 @@ class PanelRenderer:
 
         cursor_y = box[1]
         for line, line_height in zip(lines, metrics):
-            draw.text((box[0], cursor_y), line, font=font, fill=self.accent_color)
+            draw.text((box[0], cursor_y), line, font=font, fill=self.accent_color, anchor="lt")
             cursor_y += line_height + line_spacing
 
     def _draw_bullet_body(self, draw: ImageDraw.ImageDraw, body: Sequence[str], font, font_size: int) -> int:
@@ -318,8 +318,8 @@ class PanelRenderer:
             if not wrapped:
                 continue
             first_line = wrapped[0]
-            _, top, _, bottom = font.getbbox(first_line)
-            first_line_height = bottom - top
+            bbox = font.getbbox(first_line, anchor="lt")
+            first_line_height = max(1, bbox[3] - bbox[1])
 
             center_x = x0 + bullet_radius
             center_y = cursor_y + first_line_height // 2
@@ -329,9 +329,9 @@ class PanelRenderer:
             for index, segment in enumerate(wrapped):
                 if cursor_y > y1:
                     return cursor_y
-                draw.text((text_x, cursor_y), segment, font=font, fill=self.text_color)
-                _, t, _, b = font.getbbox(segment)
-                line_height = b - t
+                draw.text((text_x, cursor_y), segment, font=font, fill=self.text_color, anchor="lt")
+                bbox = font.getbbox(segment, anchor="lt")
+                line_height = max(1, bbox[3] - bbox[1])
                 cursor_y += line_height
                 if index < len(wrapped) - 1:
                     cursor_y += line_spacing
@@ -391,10 +391,19 @@ class PanelRenderer:
             width=2 if self.theme.conclusion_border_color else 0,
         )
 
-        cursor_y = rect[1] + pad_y
-        text_x = rect[0] + pad_x
+        inner_height = rect[3] - rect[1]
+        inner_width = rect[2] - rect[0]
+        available_vertical = max(0.0, inner_height - total_height)
+        vertical_padding = max(float(pad_y), available_vertical / 2.0)
+        vertical_padding = min(vertical_padding, available_vertical)
+        cursor_y = rect[1] + vertical_padding
         for idx, (line, line_height) in enumerate(zip(lines, metrics)):
-            draw.text((text_x, cursor_y), line, font=font, fill=self.text_color)
+            line_width = font.getlength(line)
+            if line_width <= max(1.0, inner_width - pad_x * 2):
+                line_x = rect[0] + (inner_width - line_width) / 2
+            else:
+                line_x = rect[0] + pad_x
+            draw.text((line_x, cursor_y), line, font=font, fill=self.text_color, anchor="lt")
             cursor_y += line_height
             if idx < len(lines) - 1:
                 cursor_y += line_spacing
@@ -432,8 +441,8 @@ class PanelRenderer:
         max_width = 0
         total_height = 0
         for idx, line in enumerate(lines):
-            _, top, _, bottom = font.getbbox(line)
-            line_height = bottom - top
+            bbox = font.getbbox(line, anchor="lt")
+            line_height = max(0, bbox[3] - bbox[1])
             metrics.append(line_height)
             total_height += line_height
             if idx < len(lines) - 1:
