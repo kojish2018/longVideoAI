@@ -6,11 +6,13 @@ import random
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from asset_pipeline import AssetPipeline, GeneratedAssets
 from config_loader import AppConfig
 from logging_utils import get_logger
+from pollinations_client import PollinationsClient
+from prompt_translator import PromptTranslator
 from script_parser import ScriptDocument
 from timeline_builder import Scene, TimelineBuilder, TimelinePlan
 from thumbnail_generator import ThumbnailGenerator
@@ -257,6 +259,15 @@ class LongFormPipeline:
             style_value = thumb_cfg.get("style")
             if isinstance(style_value, str) and style_value.strip():
                 style_override = style_value.strip().lower()
+
+        active_style = (style_override or generator.default_style or "style1").strip().lower()
+        base_image = self._maybe_prepare_style1_thumbnail_image(
+            run_dir=run_dir,
+            existing_image=base_image,
+            document=document,
+            style_key=active_style,
+        )
+
         try:
             return generator.generate(
                 title=title,
@@ -268,6 +279,114 @@ class LongFormPipeline:
         except Exception as exc:  # pragma: no cover - safeguarding pipeline
             logger.exception("Thumbnail generation failed: %s", exc)
             return None
+
+    def _maybe_prepare_style1_thumbnail_image(
+        self,
+        *,
+        run_dir: Path,
+        existing_image: Optional[Path],
+        document: ScriptDocument,
+        style_key: str,
+    ) -> Optional[Path]:
+        if style_key != "style1":
+            return existing_image
+
+        prompt_raw = (document.thumbnail_image_prompt or "").strip()
+        if not prompt_raw:
+            logger.debug("No image\" metadata found; using first scene image for thumbnail")
+            return existing_image
+
+        translator = PromptTranslator(self.config.raw)
+        prepared_prompt, translated = self._prepare_thumbnail_prompt(prompt_raw, translator)
+        if not prepared_prompt:
+            logger.warning("Thumbnail image prompt resolved empty; falling back to first scene image")
+            return existing_image
+
+        asset_dir = run_dir / "thumbnail_inputs"
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        pollinations = PollinationsClient(self.config.raw)
+        target_path = asset_dir / "style1_base.jpg"
+
+        fetched = pollinations.fetch(prepared_prompt, target_path)
+        if fetched:
+            metadata_path = asset_dir / "style1_prompt.json"
+            self._write_thumbnail_prompt_metadata(
+                metadata_path,
+                original_prompt=prompt_raw,
+                final_prompt=prepared_prompt,
+                translated=translated,
+            )
+            logger.info(
+                "Prepared style1 thumbnail hero image via Pollinations (translated=%s)",
+                translated,
+            )
+            return fetched
+
+        logger.warning("Pollinations thumbnail generation failed; falling back to scene-derived image")
+        return existing_image
+
+    def _prepare_thumbnail_prompt(
+        self,
+        prompt_raw: str,
+        translator: PromptTranslator,
+    ) -> tuple[str, bool]:
+        normalized = prompt_raw.strip()
+        if not normalized:
+            return "", False
+
+        contains_japanese = self._contains_japanese(normalized)
+        if not contains_japanese:
+            logger.info("Thumbnail prompt language=English (heuristic); using as-is")
+            return normalized, False
+
+        logger.info("Thumbnail prompt language=Japanese (heuristic); requesting DeepL translation")
+        translated = translator.translate(normalized).strip()
+        if not translated:
+            logger.warning("Thumbnail prompt translation returned empty; using original text")
+            return normalized, False
+
+        if self._contains_japanese(translated):
+            logger.warning("Thumbnail prompt translation still contains Japanese; using original text")
+            return normalized, False
+
+        if translated == normalized:
+            logger.info("DeepL translation identical to original; treating as already English")
+            return normalized, False
+
+        logger.info("Thumbnail prompt translated to English via DeepL")
+        return translated, True
+
+    @staticmethod
+    def _contains_japanese(text: str) -> bool:
+        for char in text:
+            codepoint = ord(char)
+            if (
+                0x3000 <= codepoint <= 0x303F  # punctuation
+                or 0x3040 <= codepoint <= 0x30FF  # hiragana / katakana
+                or 0x31F0 <= codepoint <= 0x31FF  # katakana phonetic extensions
+                or 0x3400 <= codepoint <= 0x4DBF  # CJK Extension A
+                or 0x4E00 <= codepoint <= 0x9FFF  # CJK Unified Ideographs
+                or 0xFF66 <= codepoint <= 0xFF9D  # half-width katakana
+            ):
+                return True
+        return False
+
+    def _write_thumbnail_prompt_metadata(
+        self,
+        metadata_path: Path,
+        *,
+        original_prompt: str,
+        final_prompt: str,
+        translated: bool,
+    ) -> None:
+        payload = {
+            "original_prompt": original_prompt,
+            "final_prompt": final_prompt,
+            "translated": translated,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _select_thumbnail_image(self, run_dir: Path, scenes: List[SceneOutput]) -> Path | None:
         for scene in scenes:

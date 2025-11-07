@@ -13,6 +13,7 @@ from long_form.ffmpeg.runner import run_ffmpeg
 from .assets_pipeline import SceneAssets
 from .bgm import PresentationBgmMixer
 from .models import CharacterPlacement
+from .utils import build_vertical_bob_expression
 
 logger = get_logger(__name__)
 
@@ -32,8 +33,8 @@ class RendererConfig:
     panel_position: tuple[int, int]
 
 
-def _read_panel_size(panel_path: Path) -> tuple[int, int]:
-    with Image.open(panel_path) as img:
+def _read_image_size(image_path: Path) -> tuple[int, int]:
+    with Image.open(image_path) as img:
         return img.size
 
 
@@ -109,7 +110,7 @@ class PresentationRenderer:
         character: Optional[CharacterPlacement],
     ) -> None:
         cfg = self.cfg
-        panel_width, panel_height = _read_panel_size(assets.panel_image_path)
+        panel_width, panel_height = _read_image_size(assets.panel_image_path)
         panel_x, panel_y = cfg.panel_position
 
         bg_scale_factor = 1.10
@@ -133,6 +134,9 @@ class PresentationRenderer:
         ]
 
         character_index = None
+        character_scale_factor: float | None = None
+        character_overlay_x: int | None = None
+        character_overlay_y: int | None = None
         if character and character.image_path.exists():
             input_args += [
                 "-loop",
@@ -143,6 +147,27 @@ class PresentationRenderer:
                 str(character.image_path),
             ]
             character_index = 2
+
+            raw_char_width, raw_char_height = _read_image_size(character.image_path)
+            base_scale = character.scale if character.scale and character.scale > 0 else 1.0
+            character_scale_factor = base_scale * 1.8
+
+            scaled_width = max(1, int(round(raw_char_width * character_scale_factor)))
+            scaled_height = max(1, int(round(raw_char_height * character_scale_factor)))
+
+            panel_right = panel_x + panel_width
+            remaining_width = max(0, cfg.width - panel_right)
+            base_x = panel_right + max((remaining_width - scaled_width) / 2.0, 0.0)
+            base_y = max((cfg.height - scaled_height) / 2.0, 0.0)
+
+            offset_x, offset_y = character.position
+            base_x += offset_x
+            base_y += offset_y
+
+            max_x = max(cfg.width - scaled_width, 0)
+            max_y = max(cfg.height - scaled_height, 0)
+            character_overlay_x = int(round(min(max(base_x, 0.0), max_x)))
+            character_overlay_y = int(round(min(max(base_y, 0.0), max_y)))
         else:
             if character and not character.image_path.exists():
                 logger.warning("Character image not found: %s", character.image_path)
@@ -162,15 +187,37 @@ class PresentationRenderer:
 
         video_stream = "[layer1]"
         audio_input_index = 2
-        if character_index is not None and character:
-            scale_factor = character.scale if character.scale else 1.0
+        if (
+            character_index is not None
+            and character
+            and character_scale_factor is not None
+            and character_overlay_x is not None
+            and character_overlay_y is not None
+        ):
             char_label = "[char]"
             filter_parts.append(
-                f"[{character_index}:v]scale=iw*{scale_factor:.3f}:ih*{scale_factor:.3f}[char_scaled]"
+                f"[{character_index}:v]scale=iw*{character_scale_factor:.3f}:ih*{character_scale_factor:.3f}[char_scaled]"
             )
             filter_parts.append("[char_scaled]format=rgba[char]")
+            animation_expr = None
+            if getattr(character, "animation", None) and character.animation.enabled:
+                animation_expr = build_vertical_bob_expression(
+                    character_overlay_y,
+                    amplitude=character.animation.amplitude,
+                    move_duration=character.animation.move_duration,
+                    rest_duration=character.animation.rest_duration,
+                )
+
+            if animation_expr:
+                overlay_cmd = (
+                    f"{video_stream}{char_label}overlay=x='{character_overlay_x:.3f}':"
+                    f"y='{animation_expr}':eval=frame[layer2]"
+                )
+            else:
+                overlay_cmd = f"{video_stream}{char_label}overlay={character_overlay_x}:{character_overlay_y}[layer2]"
+
             filter_parts.append(
-                f"{video_stream}{char_label}overlay={int(character.position[0])}:{int(character.position[1])}[layer2]"
+                overlay_cmd
             )
             video_stream = "[layer2]"
             audio_input_index = character_index + 1
@@ -180,11 +227,15 @@ class PresentationRenderer:
         filter_parts.append(f"{video_stream}subtitles={self._escape_subtitle_path(subtitles_path)}:force_style='{style}'[vout]")
 
         filters = ";".join(filter_parts)
+        scene_duration = max(assets.duration, 0.05)
+
         codec_args: List[str] = [
             "-map",
             "[vout]",
             "-map",
             f"{audio_input_index}:a?",
+            "-t",
+            f"{scene_duration:.6f}",
             "-c:v",
             cfg.codec,
             "-r",

@@ -40,6 +40,7 @@ class ScriptDocument:
     sections: List[ScriptSection]
     tags: Optional[List[str]] = None
     description: Optional[str] = None
+    thumbnail_image_prompt: Optional[str] = None
 
     def total_word_count(self) -> int:
         return sum(section.word_count for section in self.sections)
@@ -59,9 +60,10 @@ def parse_script(path: Path | str) -> ScriptDocument:
     thumbnail_title = ""
     tags: Optional[List[str]] = None
     description: Optional[str] = None
+    image_prompt: Optional[str] = None
     body_start_index = 0
 
-    # Extract metadata lines (s"...", tags"...", description"...") at the top
+    # Extract metadata lines (s"...", tags"...", description"...", image"...") at the top
     def _consume_block(prefix: str) -> str:
         nonlocal body_start_index
         line = lines[body_start_index]
@@ -108,6 +110,11 @@ def parse_script(path: Path | str) -> ScriptDocument:
             description = raw_description.strip()
             continue
 
+        if line.startswith('image"'):
+            raw_image_prompt = _consume_block('image"')
+            image_prompt = raw_image_prompt.strip()
+            continue
+
         break
 
     body_lines = lines[body_start_index:]
@@ -146,4 +153,5 @@ def parse_script(path: Path | str) -> ScriptDocument:
         sections=sections,
         tags=tags,
         description=description,
+        thumbnail_image_prompt=image_prompt,
     )

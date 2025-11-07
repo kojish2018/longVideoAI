@@ -104,6 +104,13 @@ class PresentationPipeline:
                         }
                         for line in scene.subtitle_lines
                     ],
+                    "timing": {
+                        "start": scene.start_time,
+                        "duration": scene.duration,
+                        "pre_padding": scene.pre_padding,
+                        "post_padding": scene.post_padding,
+                        "speech_duration": scene.speech_duration,
+                    },
                 }
                 for scene in scenes
             ],
@@ -125,6 +132,8 @@ class PresentationPipeline:
                 "scene_id": scene.scene.scene_id,
                 "start": round(scene.start_time, 2),
                 "duration": round(scene.duration, 2),
+                "pre_padding": round(scene.pre_padding, 3),
+                "post_padding": round(scene.post_padding, 3),
                 "narration_audio": str(self._relative(scene.audio_path, path.parent)),
             }
             for scene in scenes

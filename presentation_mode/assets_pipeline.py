@@ -1,21 +1,20 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from logging_utils import get_logger
-from pollinations_client import PollinationsClient
-from prompt_translator import PromptTranslator
 from speech_sanitizer import sanitize_for_voicevox
 
 from .models import PresentationScene, PresentationScript
 from .panel_renderer import DEFAULT_LAYOUT, PanelRenderer, PanelTheme, scale_layout
 from .subtitles import SubtitleLine, write_ass_subtitles
-from .utils import hex_to_rgb, stable_hash
-from .voicevox_adapter import PresentationVoicevoxClient
+from .utils import hex_to_rgb
+from .voicevox_adapter import PresentationVoicevoxClient, QueryTiming
 
 logger = get_logger(__name__)
 
@@ -30,65 +29,72 @@ class SceneAssets:
     panel_image_path: Path
     background_path: Path
     start_time: float
+    pre_padding: float
+    post_padding: float
+    speech_duration: float
 
 
 class BackgroundManager:
-    """Fetch and cache background images from Pollinations."""
+    """Provide a static background image for all presentation scenes."""
 
     def __init__(
         self,
         *,
         run_dir: Path,
         config: Dict[str, object],
-        translator: PromptTranslator,
     ) -> None:
         self.run_dir = run_dir
+        self._config = config
         self.background_dir = run_dir / "backgrounds"
         self.background_dir.mkdir(parents=True, exist_ok=True)
-        self.pollinations = PollinationsClient(config)
-        self.translator = translator
-        self.cache: Dict[int, Path] = {}
-        simple_cfg = config.get("simple_mode", {}) if isinstance(config, dict) else {}
-        default_prompt = simple_cfg.get("default_image_prompt", "cozy living room illustration")
-        self.default_prompt = str(default_prompt) if default_prompt else "cozy living room illustration"
+        backgrounds_dir = Path(__file__).resolve().parent / "backgrounds"
+        candidate_names = ("back8.png", "back8.PNG", "back8.jpg", "back8.JPG")
+        static_source = None
+        for name in candidate_names:
+            candidate = backgrounds_dir / name
+            if candidate.exists():
+                static_source = candidate
+                break
+        if static_source is None:
+            raise FileNotFoundError(
+                "Static background not found: expected one of back8.png/back8.jpg"
+            )
+        self.static_background_source = static_source
+        video_cfg = config.get("video", {}) if isinstance(config, dict) else {}
+        target_width = int(video_cfg.get("width", 1920))
+        target_height = int(video_cfg.get("height", 1080))
+        if target_width % 2:
+            target_width -= 1
+        if target_height % 2:
+            target_height -= 1
+        self.target_resolution = (max(2, target_width), max(2, target_height))
+        self.cached_path: Optional[Path] = None
 
-    def get(self, group_index: int, prompt: Optional[str]) -> Path:
-        if group_index in self.cache:
-            return self.cache[group_index]
+    def get(self, group_index: int, prompt: Optional[str]) -> Path:  # noqa: ARG002
+        if self.cached_path and self.cached_path.exists():
+            return self.cached_path
 
-        prompt_text = prompt or self.default_prompt
-        translated = self.translator.translate(prompt_text)
-        hash_id = stable_hash([str(group_index), translated or prompt_text])
-        output_path = self.background_dir / f"bg_{group_index:02d}_{hash_id}.png"
-        if output_path.exists():
-            logger.info("Background cache hit: %s", output_path.name)
-            self.cache[group_index] = output_path
-            return output_path
+        target = self.background_dir / self.static_background_source.name
+        if not target.exists():
+            self._prepare_background(target)
+        self.cached_path = target
+        return target
 
-        fetched = self.pollinations.fetch(translated or prompt_text, output_path)
-        if fetched:
-            self.cache[group_index] = fetched
-            return fetched
-
-        # Fallback: solid colour background to avoid failure.
-        fallback = self._create_placeholder(output_path, group_index)
-        self.cache[group_index] = fallback
-        return fallback
-
-    def _create_placeholder(self, output_path: Path, group_index: int) -> Path:
-        width = self.pollinations.width or 1920
-        height = self.pollinations.height or 1080
-        palette = [
-            (244, 236, 255),
-            (233, 244, 255),
-            (255, 241, 233),
-            (240, 255, 240),
-        ]
-        colour = palette[group_index % len(palette)]
-        image = Image.new("RGB", (width, height), colour)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        image.save(output_path)
-        return output_path
+    def _prepare_background(self, target: Path) -> None:
+        width, height = self.target_resolution
+        with Image.open(self.static_background_source) as src:
+            try:
+                resample = Image.Resampling.LANCZOS  # Pillow >=9
+            except AttributeError:  # pragma: no cover - older Pillow fallback
+                resample = Image.LANCZOS
+            fitted = ImageOps.fit(
+                src.convert("RGB"),
+                (width, height),
+                method=resample,
+                centering=(0.5, 0.5),
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            fitted.save(target, format="JPEG", quality=95)
 
 
 class PresentationAssetPipeline:
@@ -154,11 +160,10 @@ class PresentationAssetPipeline:
         )
 
         self.sub_font_name = str(text_cfg.get("font_family", "Noto Sans JP"))
-        self.sub_font_size = max(36, int(text_cfg.get("subtitle_size_override", 48)))
+        self.sub_font_size = max(36, int(text_cfg.get("subtitle_size_override", 84)))
 
         self.voice_client = PresentationVoicevoxClient(config)
-        self.translator = PromptTranslator(config)
-        self.backgrounds = BackgroundManager(run_dir=run_dir, config=config, translator=self.translator)
+        self.backgrounds = BackgroundManager(run_dir=run_dir, config=config)
 
     def prepare(self, script: PresentationScript) -> List[SceneAssets]:
         assets: List[SceneAssets] = []
@@ -167,7 +172,9 @@ class PresentationAssetPipeline:
         for index, scene in enumerate(script.scenes):
             logger.info("Generating assets for scene %s", scene.scene_id)
             display_lines = self._resolve_subtitle_lines(scene)
-            audio_path, duration, segments = self._synthesize_scene_audio(scene, display_lines)
+            audio_path, duration, segments, timing_info, speech_duration = self._synthesize_scene_audio(
+                scene, display_lines
+            )
 
             subtitles_path = self._build_subtitles(scene, segments, resolution=self._video_resolution())
             panel_path = self._render_panel(scene, index)
@@ -186,6 +193,9 @@ class PresentationAssetPipeline:
                 panel_image_path=panel_path,
                 background_path=background_path,
                 start_time=cumulative_time,
+                pre_padding=timing_info.pre_padding,
+                post_padding=timing_info.post_padding,
+                speech_duration=speech_duration,
             )
             cumulative_time += duration
             assets.append(scene_assets)
@@ -244,7 +254,7 @@ class PresentationAssetPipeline:
         self,
         scene: PresentationScene,
         subtitle_texts: Sequence[str],
-    ) -> Tuple[Path, float, Tuple[SubtitleLine, ...]]:
+    ) -> Tuple[Path, float, Tuple[SubtitleLine, ...], QueryTiming, float]:
         output_path = self.audio_dir / f"{scene.scene_id}.wav"
         narration_text = scene.narration.strip() or "。"
         sanitized_narration = sanitize_for_voicevox(narration_text)
@@ -252,41 +262,85 @@ class PresentationAssetPipeline:
             sanitized_narration = "。"
 
         primary_query = self.voice_client.create_audio_query(sanitized_narration)
+        timing_info = self.voice_client.analyze_query_timing(primary_query)
+
         if primary_query:
-            audio_path, total_duration = self.voice_client.synthesize_from_query(primary_query, output_path)
-            duration_estimates = self._estimate_line_durations(subtitle_texts)
-            durations = self._fit_durations(duration_estimates, total_duration, subtitle_texts)
+            audio_path, actual_duration = self.voice_client.synthesize_from_query(primary_query, output_path)
         else:
-            audio_path, total_duration = self.voice_client.synthesize(sanitized_narration, output_path)
-            durations = self._allocate_by_ratio(subtitle_texts, total_duration)
+            audio_path, actual_duration = self.voice_client.synthesize(sanitized_narration, output_path)
+
+        base_offset = timing_info.pre_padding
+        speech_window_end = max(actual_duration - timing_info.post_padding, base_offset)
+        speech_target_duration = max(speech_window_end - base_offset, 0.0)
+
+        duration_estimates = self._estimate_line_durations(subtitle_texts)
+        if subtitle_texts:
+            durations = self._fit_durations(duration_estimates, speech_target_duration, subtitle_texts)
+        else:
+            durations = []
 
         subtitle_lines: List[SubtitleLine] = []
-        current_offset = 0.0
         if not subtitle_texts:
+            fallback_start = base_offset
+            fallback_duration = speech_target_duration
+            if fallback_duration <= 0.0:
+                fallback_duration = max(actual_duration - fallback_start, actual_duration or 1.0)
+            fallback_duration = max(fallback_duration, 0.1)
             subtitle_lines.append(
                 SubtitleLine(
                     index=1,
-                    start=0.0,
-                    duration=total_duration or 1.0,
+                    start=fallback_start,
+                    duration=fallback_duration,
                     text=scene.narration.strip(),
                 )
             )
         else:
-            for idx, (line, duration) in enumerate(zip(subtitle_texts, durations), start=1):
+            current_start = base_offset
+            total_lines = len(subtitle_texts)
+            target_end = max(speech_window_end, current_start)
+            durations_list = list(durations)
+
+            for idx, line in enumerate(subtitle_texts, start=1):
                 clean_line = line.strip()
-                dur = max(duration, 0.05)
+                raw_duration = (
+                    durations_list[idx - 1]
+                    if idx - 1 < len(durations_list)
+                    else speech_target_duration / total_lines if total_lines else 0.0
+                )
+                remaining = total_lines - idx
+                if remaining == 0:
+                    desired_end = max(target_end, current_start)
+                    duration_value = max(desired_end - current_start, 0.05)
+                else:
+                    duration_value = max(raw_duration, 0.05)
                 subtitle_lines.append(
                     SubtitleLine(
                         index=idx,
-                        start=current_offset,
-                        duration=dur,
+                        start=current_start,
+                        duration=duration_value,
                         text=clean_line,
                     )
                 )
-                current_offset += dur
+                current_start += duration_value
 
-        total_duration = subtitle_lines[-1].end if subtitle_lines else total_duration
-        return audio_path, total_duration, tuple(subtitle_lines)
+            if subtitle_lines:
+                last = subtitle_lines[-1]
+                final_end = last.end
+                desired_end = max(target_end, min(speech_window_end, actual_duration))
+                if desired_end > final_end + 1e-3 or desired_end < final_end - 1e-3:
+                    adjusted_duration = max(desired_end - last.start, 0.05)
+                    subtitle_lines[-1] = SubtitleLine(
+                        index=last.index,
+                        start=last.start,
+                        duration=adjusted_duration,
+                        text=last.text,
+                    )
+
+        total_duration = max(actual_duration, speech_window_end)
+        if subtitle_lines:
+            total_duration = max(total_duration, subtitle_lines[-1].end)
+
+        return audio_path, total_duration, tuple(subtitle_lines), timing_info, speech_target_duration
 
     def _build_subtitles(
         self,
@@ -322,7 +376,7 @@ class PresentationAssetPipeline:
             query = self.voice_client.create_audio_query(sanitized)
             if not query:
                 return None
-            duration = self.voice_client.estimate_duration_from_query(query)
+            duration = self.voice_client.estimate_duration_from_query(query, include_padding=False)
             if duration <= 0.0:
                 duration = max(len(sanitized) * 0.05, 0.3)
             estimates.append(duration)

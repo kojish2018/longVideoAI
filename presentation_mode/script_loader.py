@@ -8,6 +8,7 @@ from logging_utils import get_logger
 
 from .models import (
     BackgroundDefaults,
+    CharacterAnimationSettings,
     CharacterPlacement,
     PanelContent,
     PanelFontOverrides,
@@ -152,10 +153,56 @@ def _parse_character(raw: Dict[str, Any] | None, *, base_dir: Path) -> Character
     if scale <= 0:
         raise ValueError("character.scale must be greater than zero")
 
+    animation = _parse_character_animation(raw.get("animation"))
+
     return CharacterPlacement(
         image_path=image_path,
         position=(x, y),
         scale=scale,
+        animation=animation,
+    )
+
+
+def _parse_character_animation(raw: Dict[str, Any] | None) -> CharacterAnimationSettings:
+    if not raw:
+        return CharacterAnimationSettings()
+    if not isinstance(raw, dict):
+        raise ValueError("character.animation must be an object if provided")
+
+    def _extract_bool(key: str, default: bool) -> bool:
+        value = raw.get(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        raise ValueError(f"character.animation.{key} must be a boolean")
+
+    def _extract_float(key: str, default: float, *, minimum: float | None = None) -> float:
+        value = raw.get(key, default)
+        try:
+            fvalue = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"character.animation.{key} must be numeric")
+        if minimum is not None and fvalue < minimum:
+            raise ValueError(f"character.animation.{key} must be >= {minimum}")
+        return fvalue
+
+    enabled = _extract_bool("enabled", True)
+    amplitude = _extract_float("amplitude", 24.0, minimum=0.0)
+    move_duration = _extract_float("move_duration", 2.0, minimum=0.01)
+    rest_duration = _extract_float("rest_duration", 5.0, minimum=0.0)
+
+    return CharacterAnimationSettings(
+        enabled=enabled,
+        amplitude=amplitude,
+        move_duration=move_duration,
+        rest_duration=rest_duration,
     )
 
 

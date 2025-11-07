@@ -49,6 +49,7 @@ class PanelTheme:
     conclusion_padding_x_factor: float = 0.9
     conclusion_padding_y_factor: float = 0.6
     conclusion_radius_factor: float = 0.55
+    body_conclusion_gap_factor: float = 0.6
 
     @staticmethod
     def _parse_color(value, default: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
@@ -101,6 +102,7 @@ class PanelTheme:
             "conclusion_padding_x_factor",
             "conclusion_padding_y_factor",
             "conclusion_radius_factor",
+            "body_conclusion_gap_factor",
         ):
             if field in data:
                 kwargs[field] = data[field]
@@ -292,7 +294,12 @@ class PanelRenderer:
 
         cursor_y = box[1]
         for line, line_height in zip(lines, metrics):
-            draw.text((box[0], cursor_y), line, font=font, fill=self.accent_color, anchor="lt")
+            line_width = font.getlength(line)
+            if line_width <= max_width:
+                line_x = box[0] + max((max_width - line_width) / 2.0, 0.0)
+            else:
+                line_x = box[0]
+            draw.text((line_x, cursor_y), line, font=font, fill=self.accent_color, anchor="lt")
             cursor_y += line_height + line_spacing
 
     def _draw_bullet_body(self, draw: ImageDraw.ImageDraw, body: Sequence[str], font, font_size: int) -> int:
@@ -354,16 +361,16 @@ class PanelRenderer:
         if not text.strip():
             return
         max_width = box[2] - box[0]
-        lines = self._wrap_text(text, font, max_width)
-        if not lines:
-            return
-
         pad_x = int(font_size * self.theme.conclusion_padding_x_factor)
         pad_y = int(font_size * self.theme.conclusion_padding_y_factor)
+        content_width = max(10, max_width - pad_x * 2)
+        lines = self._wrap_text(text, font, content_width)
+        if not lines:
+            return
         line_spacing = int(font_size * 0.18)
         metrics, total_height, max_line_width = self._measure_wrapped_lines(lines, font, line_spacing)
 
-        gap_after_body = max(10, int(font_size * 0.3))
+        gap_after_body = max(10, int(font_size * self.theme.body_conclusion_gap_factor))
         candidate_top = box[1]
         if start_y is not None and start_y > 0:
             candidate_top = start_y + gap_after_body

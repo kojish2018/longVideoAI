@@ -63,3 +63,32 @@ def load_font(path: str | None, size: int) -> ImageFont.ImageFont:
 def stable_hash(parts: Iterable[str], length: int = 10) -> str:
     digest = hashlib.sha1("||".join(parts).encode("utf-8")).hexdigest()
     return digest[:length]
+
+
+def build_vertical_bob_expression(
+    base_y: float,
+    *,
+    amplitude: float,
+    move_duration: float,
+    rest_duration: float,
+) -> str | None:
+    amplitude = float(amplitude)
+    move_duration = float(move_duration)
+    rest_duration = max(0.0, float(rest_duration))
+
+    if amplitude == 0.0 or move_duration <= 0.0:
+        return None
+
+    cycle_duration = move_duration + rest_duration
+    if cycle_duration <= 0.0:
+        return None
+
+    mod_expr = f"mod(t,{cycle_duration:.6f})"
+
+    if rest_duration > 0.0:
+        gate_expr = f"lt({mod_expr},{move_duration:.6f})"
+        motion_expr = f"{gate_expr}*({amplitude:.6f}*sin(2*PI*{mod_expr}/{move_duration:.6f}))"
+    else:
+        motion_expr = f"{amplitude:.6f}*sin(2*PI*{mod_expr}/{move_duration:.6f})"
+
+    return f"{base_y:.3f} + ({motion_expr})"

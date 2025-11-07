@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
@@ -16,6 +17,15 @@ def _to_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+@dataclass(frozen=True)
+class QueryTiming:
+    pre_padding: float
+    post_padding: float
+    speed_scale: float
+    speech_duration: float
+    total_duration: float
 
 
 class PresentationVoicevoxClient(VoicevoxClient):
@@ -54,12 +64,19 @@ class PresentationVoicevoxClient(VoicevoxClient):
             logger.error("VOICEVOX synthesis from query failed (%s)", exc)
             return self.synthesize("", output_path)
 
-    def estimate_duration_from_query(self, audio_query: Optional[Dict[str, Any]]) -> float:
+    def estimate_duration_from_query(
+        self,
+        audio_query: Optional[Dict[str, Any]],
+        *,
+        include_padding: bool = True,
+    ) -> float:
         if not audio_query:
             return 0.0
 
         total = 0.0
-        total += _to_float(audio_query.get("prePhonemeLength"))
+        pre = _to_float(audio_query.get("prePhonemeLength"))
+        if include_padding:
+            total += pre
 
         accent_phrases: Sequence[Dict[str, Any]] = (
             audio_query.get("accent_phrases")
@@ -75,11 +92,43 @@ class PresentationVoicevoxClient(VoicevoxClient):
             total += _to_float(pause_mora.get("vowel_length"))
             total += _to_float(phrase.get("pause_length"))
 
-        total += _to_float(audio_query.get("postPhonemeLength"))
+        post = _to_float(audio_query.get("postPhonemeLength"))
+        if include_padding:
+            total += post
 
         speed = _to_float(audio_query.get("speedScale"))
         if speed <= 0:
             speed = 1.0
         total /= speed
 
+        if not include_padding:
+            # Ensure we never return negative even if pauses exceed speech.
+            total = max(total, 0.0)
+            # Small guard to avoid zero durations which later get clamped.
+            if total == 0.0 and (pre > 0.0 or post > 0.0):
+                total = pre + post
+
         return max(total, 0.0)
+
+    def analyze_query_timing(self, audio_query: Optional[Dict[str, Any]]) -> QueryTiming:
+        speed = _to_float(audio_query.get("speedScale")) if audio_query else 1.0
+        if speed <= 0.0:
+            speed = 1.0
+
+        pre_raw = _to_float(audio_query.get("prePhonemeLength")) if audio_query else 0.0
+        post_raw = _to_float(audio_query.get("postPhonemeLength")) if audio_query else 0.0
+        pre = max(pre_raw / speed, 0.0)
+        post = max(post_raw / speed, 0.0)
+
+        speech_duration = self.estimate_duration_from_query(audio_query, include_padding=False)
+        total_duration = speech_duration + pre + post
+        if total_duration <= 0.0:
+            total_duration = self.estimate_duration_from_query(audio_query, include_padding=True)
+
+        return QueryTiming(
+            pre_padding=pre,
+            post_padding=post,
+            speed_scale=speed,
+            speech_duration=max(speech_duration, 0.0),
+            total_duration=max(total_duration, 0.0),
+        )

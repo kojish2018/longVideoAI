@@ -6,6 +6,14 @@ from typing import List, Optional, Sequence, Tuple
 
 
 @dataclass(frozen=True)
+class CharacterAnimationSettings:
+    enabled: bool = True
+    amplitude: float = 24.0
+    move_duration: float = 2.0
+    rest_duration: float = 5.0
+
+
+@dataclass(frozen=True)
 class PanelFontOverrides:
     title_size: Optional[int] = None
     body_size: Optional[int] = None
@@ -25,6 +33,7 @@ class CharacterPlacement:
     image_path: Path
     position: Tuple[float, float] = (0.0, 0.0)
     scale: float = 1.0
+    animation: CharacterAnimationSettings = field(default_factory=CharacterAnimationSettings)
 
 
 @dataclass(frozen=True)

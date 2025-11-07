@@ -39,7 +39,18 @@
           "required": ["x", "y"],
           "additionalProperties": false
         },
-        "scale": { "type": "number", "minimum": 0.1 }
+        "scale": { "type": "number", "minimum": 0.1 },
+        "animation": {
+          "type": "object",
+          "description": "キャラクターのループアニメーション設定。",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "amplitude": { "type": "number", "minimum": 0 },
+            "move_duration": { "type": "number", "exclusiveMinimum": 0 },
+            "rest_duration": { "type": "number", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
       },
       "required": ["image_path"],
       "additionalProperties": false
