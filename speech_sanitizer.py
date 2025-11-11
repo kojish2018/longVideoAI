@@ -22,6 +22,16 @@ def sanitize_for_voicevox(text: str) -> str:
     """
     if not text:
         return text
+    # Drop inline markers like '%%START' / '%%END' entirely (line-based)
+    marker_lines = []
+    for ln in text.splitlines(keepends=False):
+        if ln.strip().startswith("%%"):
+            # Skip all lines that start with '%%' for safety
+            marker_lines.append("")
+        else:
+            marker_lines.append(ln)
+    text = "\n".join(marker_lines)
+
     stripped = _REMOVE_RE.sub("", text)
     # 圧縮は改行を壊さないようにスペース/タブのみ対象
     stripped = _SPACE_COMPRESS_RE.sub(" ", stripped)
@@ -29,4 +39,3 @@ def sanitize_for_voicevox(text: str) -> str:
     lines = stripped.splitlines(keepends=True)
     lines = [re.sub(r"^[ \t]+|[ \t]+$", "", ln) for ln in lines]
     return "".join(lines)
-

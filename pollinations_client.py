@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
 import time
 from pathlib import Path
@@ -23,6 +24,12 @@ class PollinationsClient:
         self.model = pollinations_cfg.get("model", "flux")
         self.width = pollinations_cfg.get("width", 1920)
         self.height = pollinations_cfg.get("height", 1080)
+        token_cfg = str(pollinations_cfg.get("api_token", "")).strip()
+        env_token = os.getenv("POLLINATIONS_API_TOKEN", "").strip()
+        self.api_token = token_cfg or env_token or None
+        referrer_cfg = str(pollinations_cfg.get("referrer", "")).strip()
+        env_referrer = os.getenv("POLLINATIONS_REFERRER", "").strip()
+        self.referrer = referrer_cfg or env_referrer or None
         # Retry settings (optional)
         self.retries = int(pollinations_cfg.get("retries", 3))
         self.retry_backoff_base = float(pollinations_cfg.get("retry_backoff_base", 1.0))
@@ -41,6 +48,8 @@ class PollinationsClient:
             "width": self.width,
             "height": self.height,
         }
+        if self.referrer:
+            params["referrer"] = self.referrer
         query = urlencode(params)
         # Encode all reserved chars including '/'
         encoded_prompt = quote(prompt, safe="")
@@ -48,6 +57,11 @@ class PollinationsClient:
 
         logger.info("Pollinations request: %s", prompt[:80])
         logger.debug("Pollinations URL: %s", url)
+
+        headers: Dict[str, str] = {}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+            logger.debug("Pollinations client using bearer token authentication")
 
         if output_path.exists():
             logger.info("Pollinations cache hit: %s", output_path.name)
@@ -62,6 +76,7 @@ class PollinationsClient:
                     url,
                     timeout=(self.timeout_connect, self.timeout_read),
                     allow_redirects=True,
+                    headers=headers or None,
                 )
                 # Retry on 429/5xx
                 status = response.status_code

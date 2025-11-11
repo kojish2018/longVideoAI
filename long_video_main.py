@@ -13,6 +13,7 @@ from logging_utils import configure_logging, get_logger
 from long_pipeline import LongFormPipeline, PipelineResult
 from script_parser import ScriptDocument, parse_script
 from youtube_uploader import YouTubeUploader
+from sns_shorts_posts.shorts_orchestrator import generate_shorts_for_run
 
 logger = get_logger(__name__)
 
@@ -80,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--thumbnail-style",
         choices=["style1", "style2"],
         help="Select thumbnail design style (style1=classic, style2=bold pop).",
+    )
+    parser.add_argument(
+        "--with-shorts",
+        action="store_true",
+        help=(
+            "After rendering the long video, automatically build vertical shorts for all %%START/%%END blocks in the script."
+        ),
     )
     parser.add_argument(
         "--voicevox-speaker",
@@ -579,6 +587,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_plan:
         print(result.plan_file.read_text(encoding="utf-8"))
 
+    shorts_summary = None
+    if getattr(args, "with_shorts", False):
+        try:
+            shorts_summary = generate_shorts_for_run(
+                script_path=Path(args.script).expanduser().resolve(),
+                run_dir=result.output_dir,
+                layout_path=Path("sns_shorts_posts/layouts/vertical_v1.json"),
+                output_dir=Path("output/shorts/ready"),
+                work_dir=Path("output/shorts/work"),
+                execute=True,
+            )
+            logger.info(
+                "Shorts generated: %s items (manifest: %s)",
+                shorts_summary.get("count"),
+                shorts_summary.get("manifest"),
+            )
+        except Exception:
+            logger.exception("Short generation failed; continuing without shorts.")
+
     summary = {
         "run_id": result.run_id,
         "output_dir": str(result.output_dir),
@@ -586,6 +613,9 @@ def main(argv: list[str] | None = None) -> int:
         "total_duration_seconds": result.total_duration,
         "scene_count": len(result.scenes),
     }
+    if shorts_summary:
+        summary["shorts_manifest"] = shorts_summary.get("manifest")
+        summary["shorts_count"] = shorts_summary.get("count")
     if youtube_video_id:
         summary["youtube_video_id"] = youtube_video_id
         summary["youtube_url"] = f"https://www.youtube.com/watch?v={youtube_video_id}"

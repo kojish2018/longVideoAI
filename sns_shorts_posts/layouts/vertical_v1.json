@@ -1,0 +1,74 @@
+{
+  "canvas": { "width": 1080, "height": 1920, "fps": 30 },
+  "image_area": { "width": 960, "height": 960, "y": 360 },
+  "caption_area": {
+    "x": 90,
+    "y": 1340,
+    "width": 900,
+    "height": 320,
+    "panel_opacity": 0.0
+  },
+  "title": {
+    "y": 120,
+    "font_name": "Noto Sans CJK JP",
+    "font_size": 66,
+    "color": "#111111"
+  },
+  "styles": {
+    "Typing": {
+      "Fontname": "Noto Sans CJK JP",
+      "Fontsize": 68,
+      "PrimaryColour": "&H00101010&",
+      "SecondaryColour": "&H00101010&",
+      "OutlineColour": "&H00000000&",
+      "BackColour": "&H00000000&",
+      "Bold": 0,
+      "Italic": 0,
+      "Underline": 0,
+      "StrikeOut": 0,
+      "ScaleX": 100,
+      "ScaleY": 100,
+      "Spacing": 0,
+      "Angle": 0,
+      "BorderStyle": 1,
+      "Outline": 0,
+      "Shadow": 0,
+      "Alignment": 8,
+      "MarginL": 90,
+      "MarginR": 90,
+      "MarginV": 1340,
+      "Encoding": 1,
+      "WrapStyle": 2
+    },
+    "Title": {
+      "Fontname": "Noto Sans CJK JP",
+      "Fontsize": 68,
+      "PrimaryColour": "&H00101010&",
+      "SecondaryColour": "&H00000000&",
+      "OutlineColour": "&H00000000&",
+      "BackColour": "&H00000000&",
+      "Bold": 0,
+      "Italic": 0,
+      "Underline": 0,
+      "StrikeOut": 0,
+      "ScaleX": 100,
+      "ScaleY": 100,
+      "Spacing": 0,
+      "Angle": 0,
+      "BorderStyle": 1,
+      "Outline": 0,
+      "Shadow": 0,
+      "Alignment": 8,
+      "MarginL": 90,
+      "MarginR": 90,
+      "MarginV": 160,
+      "Encoding": 1,
+      "WrapStyle": 2
+    }
+  },
+  "typing": {
+    "min_char_ms": 20,
+    "max_char_ms": 80,
+    "min_chars_for_duration": 6
+  }
+}

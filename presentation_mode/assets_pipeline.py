@@ -160,7 +160,9 @@ class PresentationAssetPipeline:
         )
 
         self.sub_font_name = str(text_cfg.get("font_family", "Noto Sans JP"))
-        self.sub_font_size = max(36, int(text_cfg.get("subtitle_size_override", 84)))
+        base_subtitle_size = int(text_cfg.get("subtitle_size_override", 84))
+        scaled_subtitle_size = int(round(base_subtitle_size * 1.3))
+        self.sub_font_size = max(36, scaled_subtitle_size)
 
         self.voice_client = PresentationVoicevoxClient(config)
         self.backgrounds = BackgroundManager(run_dir=run_dir, config=config)

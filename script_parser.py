@@ -118,6 +118,11 @@ def parse_script(path: Path | str) -> ScriptDocument:
         break
 
     body_lines = lines[body_start_index:]
+    # Remove inline short-markers for long-form rendering safety
+    # Lines that are exactly '%%START' or '%%END' (with surrounding spaces) are dropped
+    import re  # local import to avoid global dependency for simple filter
+    _marker_re = re.compile(r"^\s*%%(?:START|END)\s*$")
+    body_lines = [ln for ln in body_lines if not _marker_re.match(ln)]
     if not thumbnail_title:
         logger.warning("Thumbnail title line (s\"...\") not found; using fallback title")
 

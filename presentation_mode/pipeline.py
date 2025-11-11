@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from logging_utils import get_logger
 
@@ -13,6 +13,7 @@ from config_loader import AppConfig
 from .assets_pipeline import PresentationAssetPipeline, SceneAssets
 from .models import PresentationScript
 from .renderer import PresentationRenderer
+from .thumbnail_manager import copy_thumbnail
 
 logger = get_logger(__name__)
 
@@ -26,6 +27,7 @@ class PresentationResult:
     timeline_path: Path
     scenes: List[SceneAssets]
     total_duration: float
+    thumbnail_path: Optional[Path]
 
 
 class PresentationPipeline:
@@ -35,7 +37,13 @@ class PresentationPipeline:
         self.config = config
         self.renderer = PresentationRenderer(config.raw)
 
-    def run(self, script: PresentationScript) -> PresentationResult:
+    def run(
+        self,
+        script: PresentationScript,
+        *,
+        thumbnail_source: Path | str | None = None,
+        thumbnail_name: Optional[str] = None,
+    ) -> PresentationResult:
         run_id = datetime.utcnow().strftime("presentation_%Y%m%d_%H%M%S")
         output_root = self.config.output_dir
         output_root.mkdir(parents=True, exist_ok=True)
@@ -54,9 +62,23 @@ class PresentationPipeline:
             output_path=final_video_path,
         )
 
+        thumbnail_path = copy_thumbnail(
+            run_dir=run_dir,
+            run_id=run_id,
+            source_path=thumbnail_source,
+            copy_name=thumbnail_name,
+        )
+
         plan_path = run_dir / "plan.json"
         timeline_path = run_dir / "timeline.json"
-        self._write_plan(plan_path, run_id, script, scene_assets, final_video_path)
+        self._write_plan(
+            plan_path,
+            run_id,
+            script,
+            scene_assets,
+            final_video_path,
+            thumbnail_path,
+        )
         self._write_timeline(timeline_path, scene_assets)
 
         logger.info("Presentation pipeline complete: %s", final_video_path)
@@ -68,6 +90,7 @@ class PresentationPipeline:
             timeline_path=timeline_path,
             scenes=list(scene_assets),
             total_duration=total_duration,
+            thumbnail_path=thumbnail_path,
         )
 
     def _write_plan(
@@ -77,6 +100,7 @@ class PresentationPipeline:
         script: PresentationScript,
         scenes: Sequence[SceneAssets],
         video_path: Path,
+        thumbnail_path: Optional[Path],
     ) -> None:
         payload: Dict[str, object] = {
             "run_id": run_id,
@@ -85,6 +109,7 @@ class PresentationPipeline:
             "description": script.description,
             "tags": list(script.tags),
             "video_path": str(video_path.name),
+            "thumbnail_path": str(self._relative(thumbnail_path, path.parent)) if thumbnail_path else None,
             "scenes": [
                 {
                     "scene_id": scene.scene.scene_id,

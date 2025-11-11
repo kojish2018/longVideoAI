@@ -27,3 +27,31 @@ python -m presentation_mode.main presentation_mode/sample_scripts/quick_demo.jso
 ```
 
 背景は常に `presentation_mode/backgrounds/back8.png` を 16:9 にリサイズして利用するため、ネットワーク接続は不要です。
+
+## サムネ再利用と YouTube アップロード
+
+長尺パイプライン同様に、既存サムネイルのコピーと YouTube への自動アップロードに対応しました。いずれも `presentation_mode/` 配下のみの変更で完結します。
+
+### サムネイルのコピー
+
+- `--thumbnail-path` に既存 PNG/JPG などのファイルを指定すると、レンダリング結果のランディレクトリへコピーされます。
+- コピー先ファイル名は `thumbnail_<run_id><拡張子>` がデフォルトです。別名にしたい場合は `--thumbnail-copy-name custom_name.png` を併用してください。
+- コピーに成功すると `plan.json` と `PresentationResult` の `thumbnail_path` に保存先パスが含まれます。そのままアップロード処理へ引き渡されます。
+
+### YouTube へのアップロード
+
+- `--upload` を指定するとレンダリング後に `youtube_uploader.py` を呼び出し、`credentials_fire/` の認証情報（デフォルト）で動画をアップロードします。
+- チャンネルプロファイルは `--youtube-channel` で変更できます（既定値は `fire`）。`config.yaml` の `youtube.channel_profiles` に定義されたキーを渡してください。
+- 予約公開を行いたい場合は `--publish-at "2025-11-08 21:30"` または `--publish-at 2025-11-08T21:30:00+09:00` のように指定します。無効な形式はログに警告を出して即時公開にフォールバックします。
+- 説明文は JSON 台本の `description` を優先し、未設定の場合は `config.yaml` の `youtube.description_template` を利用します。タグは `tags` フィールドから自動整形され、ハッシュタグ行として説明文末尾に追記されます。
+
+#### 利用例
+
+```bash
+python -m presentation_mode.main presentation_mode/sample_scripts/quick_demo.json \
+  --thumbnail-path output/thumbnails/latest.png \
+  --upload \
+  --publish-at "2025-11-08 21:30"
+```
+
+> **注意**: YouTube Data API を利用するために `google-api-python-client` と OAuth 認証情報が必要です。`credentials_fire/` 以下に配置されたクライアントシークレットとトークンが有効な状態であることを確認してください。初回実行時はブラウザでの OAuth 認可が求められます。
