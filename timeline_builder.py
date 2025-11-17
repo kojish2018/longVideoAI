@@ -76,12 +76,12 @@ class TimelineBuilder:
         self.max_duration = float(sections_cfg.get("max_duration_seconds", 120))
         raw_max_chunks = sections_cfg.get("max_chunks_per_scene")
         try:
-            max_chunks = int(raw_max_chunks) if raw_max_chunks is not None else 10
+            max_chunks = int(raw_max_chunks) if raw_max_chunks is not None else 2
         except (TypeError, ValueError):
             logger.warning(
                 "Invalid max_chunks_per_scene=%s; falling back to default", raw_max_chunks
             )
-            max_chunks = 10
+            max_chunks = 2
         self.max_chunks_per_scene = max_chunks if max_chunks > 0 else 0
 
         bgm_library = config.get("bgm", {}).get("library", [])
