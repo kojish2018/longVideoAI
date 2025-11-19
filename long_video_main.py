@@ -109,6 +109,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--image-provider",
+        choices=["pollinations", "deepinfra"],
+        help=(
+            "Select image generation provider. Defaults to the value in config.yaml (pollinations if omitted)."
+        ),
+    )
+    parser.add_argument(
+        "--image-base-prompt",
+        help=(
+            "Override the default Pollinations prompt (config.simple_mode.default_image_prompt)."
+        ),
+    )
+    parser.add_argument(
         "--youtube-channel",
         help=(
             "Select YouTube channel profile to use for credentials. "
@@ -424,6 +437,52 @@ def _apply_background_music(*, config: AppConfig, override: Optional[str]) -> st
     return selected
 
 
+def _apply_image_provider(*, config: AppConfig, override: Optional[str]) -> str:
+    if not isinstance(config.raw, dict):
+        raise ValueError("Configuration root must be a mapping to select image provider.")
+
+    apis_cfg = config.raw.setdefault("apis", {})
+    if not isinstance(apis_cfg, dict):
+        apis_cfg = {}
+        config.raw["apis"] = apis_cfg
+
+    allowed = {"pollinations", "deepinfra"}
+    provider_raw = override or apis_cfg.get("image_provider") or "pollinations"
+    provider = str(provider_raw).strip().lower()
+    if provider not in allowed:
+        known = ", ".join(sorted(allowed))
+        raise ValueError(
+            f"Unknown image provider '{provider}'. Supported providers: {known}."
+        )
+
+    apis_cfg["image_provider"] = provider
+    return provider
+
+
+def _apply_image_prompt_override(*, config: AppConfig, prompt_text: str) -> str:
+    if not isinstance(config.raw, dict):
+        raise ValueError("Configuration root must be a mapping to override image prompt.")
+
+    trimmed = str(prompt_text).strip()
+    if not trimmed:
+        raise ValueError("--image-base-prompt cannot be empty.")
+
+    simple_cfg = config.raw.setdefault("simple_mode", {})
+    if not isinstance(simple_cfg, dict):
+        simple_cfg = {}
+        config.raw["simple_mode"] = simple_cfg
+
+    simple_cfg["default_image_prompt"] = trimmed
+
+    constants = simple_cfg.setdefault("prompt_constants", {})
+    if not isinstance(constants, dict):
+        constants = {}
+        simple_cfg["prompt_constants"] = constants
+    constants["style"] = trimmed
+
+    return trimmed
+
+
 def _apply_voicevox_profile(
     *, config: AppConfig, requested_profile: Optional[str], speaker_override: Optional[int]
 ) -> tuple[str, int]:
@@ -535,6 +594,25 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Background music selected: %s", selected_bgm)
     except ValueError as exc:
         parser.error(str(exc))
+
+    try:
+        provider_name = _apply_image_provider(
+            config=config,
+            override=getattr(args, "image_provider", None),
+        )
+        logger.info("Image provider selected: %s", provider_name)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    if getattr(args, "image_base_prompt", None) is not None:
+        try:
+            applied_prompt = _apply_image_prompt_override(
+                config=config,
+                prompt_text=args.image_base_prompt,
+            )
+            logger.info("Image base prompt override applied: %s", applied_prompt)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     if args.thumbnail_style:
         try:

@@ -11,13 +11,13 @@ from typing import Dict, List, Optional
 from asset_pipeline import AssetPipeline, GeneratedAssets
 from config_loader import AppConfig
 from logging_utils import get_logger
-from pollinations_client import PollinationsClient
 from prompt_translator import PromptTranslator
 from script_parser import ScriptDocument
 from timeline_builder import Scene, TimelineBuilder, TimelinePlan
 from thumbnail_generator import ThumbnailGenerator
 from video_generator import ScenePlan, TextSegmentPlan, VideoGenerator
 from renderer_factory import make_renderer
+from image_provider_factory import make_image_client
 
 logger = get_logger(__name__)
 
@@ -304,10 +304,11 @@ class LongFormPipeline:
 
         asset_dir = run_dir / "thumbnail_inputs"
         asset_dir.mkdir(parents=True, exist_ok=True)
-        pollinations = PollinationsClient(self.config.raw)
+        image_client = make_image_client(self.config.raw)
+        provider_name = type(image_client).__name__
         target_path = asset_dir / "style1_base.jpg"
 
-        fetched = pollinations.fetch(prepared_prompt, target_path)
+        fetched = image_client.fetch(prepared_prompt, target_path)
         if fetched:
             metadata_path = asset_dir / "style1_prompt.json"
             self._write_thumbnail_prompt_metadata(
@@ -317,12 +318,16 @@ class LongFormPipeline:
                 translated=translated,
             )
             logger.info(
-                "Prepared style1 thumbnail hero image via Pollinations (translated=%s)",
+                "Prepared style1 thumbnail hero image via %s (translated=%s)",
+                provider_name,
                 translated,
             )
             return fetched
 
-        logger.warning("Pollinations thumbnail generation failed; falling back to scene-derived image")
+        logger.warning(
+            "%s thumbnail generation failed; falling back to scene-derived image",
+            provider_name,
+        )
         return existing_image
 
     def _prepare_thumbnail_prompt(
