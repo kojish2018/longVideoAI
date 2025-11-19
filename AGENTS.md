@@ -23,3 +23,7 @@
 ## feature/a ブランチメモ
 - DeepInfra 連携の長所と課題を整理し、長尺パイプラインに統合する。 
 - テスト用に `test/test_deepinfra_client.py` を整備し、API のレート制限をログに記録する方針をドラフト化する。
+
+## feature/b ブランチメモ
+- `image_provider_factory.py` に新スタイルプリセットを追加し、`pollinations_style/` ディレクトリとの整合を確認する。
+- `AGENTS.md` の内容を長尺向けオンボーディングに組み込むため、翻訳版のドラフトを `docs/` 配下に作成する計画を明記する。
