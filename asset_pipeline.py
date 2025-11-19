@@ -12,7 +12,7 @@ from logging_utils import get_logger
 from PIL import Image
 import random
 import shutil
-from pollinations_client import PollinationsClient
+from image_provider_factory import make_image_client
 from prompt_translator import PromptTranslator
 from timeline_builder import Scene, SceneChunk, SceneType
 from voicevox_client import VoicevoxClient
@@ -64,8 +64,10 @@ class AssetPipeline:
         self.run_dir = run_dir
         self.config = config
         self.voice_client = VoicevoxClient(config)
-        self.image_client = PollinationsClient(config)
+        self.image_client = make_image_client(config)
         self.translator = PromptTranslator(config)
+
+        logger.info("Image provider client initialised: %s", type(self.image_client).__name__)
 
         simple_cfg = config.get("simple_mode", {}) if isinstance(config, dict) else {}
         if isinstance(simple_cfg, dict):
@@ -338,7 +340,9 @@ class AssetPipeline:
 
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            placeholder = Image.new("RGB", (self.image_client.width, self.image_client.height), (32, 32, 32))
+            placeholder_width = int(getattr(self.image_client, "width", 1024) or 1024)
+            placeholder_height = int(getattr(self.image_client, "height", 1024) or 1024)
+            placeholder = Image.new("RGB", (placeholder_width, placeholder_height), (32, 32, 32))
             placeholder.save(target_path, format="JPEG", quality=85)
             logger.warning("No default images found; wrote placeholder for %s", scene_id)
         except Exception as exc:  # pragma: no cover
