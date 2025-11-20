@@ -1,0 +1,50 @@
+{
+  "title": "ゆっくり解説デモ：霊夢と魔理沙が都市伝説を語る",
+  "tags": ["デモ", "ゆっくり解説", "都市伝説"],
+  "thumbnail_image_prompt": "yukkuri duo talking, mysterious train platform, soft lighting",
+  "description": "JSON 台本読み込みのデモです。霊夢と魔理沙の掛け合いで 3 カットを生成します。",
+  "scenes": [
+    {
+      "bg_image": "IMG_3890.PNG",
+      "utterances": [
+        {
+          "speaker": "霊夢",
+          "text": "ねえ魔理沙、ひつか駅って知ってる？ 怖い噂があるらしいんだけど……"
+        },
+        {
+          "speaker": "魔理沙",
+          "text": "ああ、あの霧の駅だろ？ 昼間なら平気さ。ちょっと行ってみようぜ。",
+          "bgm": "GoodDays.mp3"
+        }
+      ]
+    },
+    {
+      "bg_image": "IMG_3892.PNG",
+      "utterances": [
+        {
+          "speaker": "霊夢",
+          "text": "うわ、ほんとに霧だらけ……。人影もないし、雰囲気ありすぎだよ。"
+        },
+        {
+          "speaker": "魔理沙",
+          "text": "このベンチに座ってた子どもが変なことを話してたんだ。『まだ昼間だから大丈夫』って。",
+          "duration": 4.2
+        }
+      ]
+    },
+    {
+      "bg_image": "IMG_3893.PNG",
+      "utterances": [
+        {
+          "speaker": "霊夢",
+          "text": "やっぱり明るいうちに帰ろ？ 夜に戻ってこれなくなったら嫌だし。"
+        },
+        {
+          "speaker": "魔理沙",
+          "text": "だな。今日はここまでにして、あとでちゃんと調べて動画にまとめようぜ。",
+          "bgm": "Telecasted.mp3"
+        }
+      ]
+    }
+  ]
+}
