@@ -18,6 +18,7 @@ from moviepy.editor import (
     concatenate_videoclips,
 )
 import pyloudnorm as pyln
+from animation_config import resolve_ken_burns_profile
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,7 @@ class VideoGenerator:
         animation_cfg = config.get("animation", {}) if isinstance(config, dict) else {}
 
         colors = text_cfg.get("colors", {}) if isinstance(text_cfg, dict) else {}
+        kb_profile = resolve_ken_burns_profile(animation_cfg)
 
         # Resolve sizes
         thumb_title_size = int(config.get("thumbnail", {}).get("title_font_size", 72)) if isinstance(config, dict) else 72
@@ -94,10 +96,10 @@ class VideoGenerator:
             audio_codec=str(video_cfg.get("audio_codec", "aac")),
             audio_bitrate=video_cfg.get("audio_bitrate"),
             audio_sample_rate=int(video_cfg.get("audio_sample_rate", 48000)),
-            padding_seconds=float(animation_cfg.get("padding_seconds", 0.35)),
-            ken_burns_zoom=float(animation_cfg.get("ken_burns_zoom", 0.0)),
-            ken_burns_offset=float(animation_cfg.get("ken_burns_offset", 0.03)),
-            ken_burns_margin=float(animation_cfg.get("ken_burns_margin", 0.08)),
+            padding_seconds=kb_profile.padding_seconds,
+            ken_burns_zoom=kb_profile.zoom,
+            ken_burns_offset=kb_profile.offset,
+            ken_burns_margin=kb_profile.margin,
             font_path=text_cfg.get("font_path"),
             body_font_size=int(text_cfg.get("default_size", 36)),
             body_color=_hex_to_rgb(colors.get("default", "#FFFFFF")),

@@ -18,6 +18,7 @@ from thumbnail_generator import ThumbnailGenerator
 from video_generator import ScenePlan, TextSegmentPlan, VideoGenerator
 from renderer_factory import make_renderer
 from image_provider_factory import make_image_client
+from animation_config import resolve_ken_burns_profile
 
 logger = get_logger(__name__)
 
@@ -68,7 +69,8 @@ class LongFormPipeline:
         self.config = config
         self.builder = TimelineBuilder(config.raw)
         animation_cfg = config.raw.get("animation", {}) if isinstance(config.raw, dict) else {}
-        self._ken_burns_margin = float(animation_cfg.get("ken_burns_margin", 0.08))
+        kb_profile = resolve_ken_burns_profile(animation_cfg)
+        self._ken_burns_margin = kb_profile.margin
 
     def run(self, document: ScriptDocument) -> PipelineResult:
         run_id = datetime.utcnow().strftime("longform_%Y%m%d_%H%M%S")

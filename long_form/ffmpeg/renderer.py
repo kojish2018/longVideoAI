@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from PIL import Image, ImageDraw, ImageFont
 
 from logging_utils import get_logger
+from animation_config import resolve_ken_burns_profile
 from .runner import run_ffmpeg, run_ffmpeg_stream
 from .progress import ConsoleBar
 from .concat import concat_mp4_streamcopy
@@ -63,6 +64,7 @@ class FFmpegVideoGenerator:
         colors = text_cfg.get("colors", {}) if isinstance(text_cfg, dict) else {}
 
         opening_title_size = 75
+        kb_profile = resolve_ken_burns_profile(animation_cfg)
 
         self.render_cfg = RenderConfig(
             width=int(video_cfg.get("width", 1280)),
@@ -75,18 +77,18 @@ class FFmpegVideoGenerator:
             audio_codec=str(video_cfg.get("audio_codec", "aac")),
             audio_bitrate=str(video_cfg.get("audio_bitrate")) if video_cfg.get("audio_bitrate") else None,
             audio_sample_rate=int(video_cfg.get("audio_sample_rate", 48000)),
-            padding_seconds=float(animation_cfg.get("padding_seconds", 0.35)),
-            ken_burns_zoom=float(animation_cfg.get("ken_burns_zoom", 0.0)),
+            padding_seconds=kb_profile.padding_seconds,
+            ken_burns_zoom=kb_profile.zoom,
             # Interpreted as fraction of output size (MoviePy parity).
-            ken_burns_offset=float(animation_cfg.get("ken_burns_offset", 0.03)),
-            ken_burns_margin=float(animation_cfg.get("ken_burns_margin", 0.08)),
-            ken_burns_motion_scale=float(animation_cfg.get("ken_burns_motion_scale", 1.0)),
-            ken_burns_full_travel=bool(animation_cfg.get("ken_burns_full_travel", False)),
-            ken_burns_max_margin=float(animation_cfg.get("ken_burns_max_margin", 1.0)),
-            ken_burns_mode=str(animation_cfg.get("ken_burns_mode", "zoompan")).lower(),
-            ken_burns_pan_extent=float(animation_cfg.get("ken_burns_pan_extent", 1.0)),
-            ken_burns_intro_relief=float(animation_cfg.get("ken_burns_intro_relief", 0.2)),
-            ken_burns_intro_seconds=float(animation_cfg.get("ken_burns_intro_seconds", 0.8)),
+            ken_burns_offset=kb_profile.offset,
+            ken_burns_margin=kb_profile.margin,
+            ken_burns_motion_scale=kb_profile.motion_scale,
+            ken_burns_full_travel=kb_profile.full_travel,
+            ken_burns_max_margin=kb_profile.max_margin,
+            ken_burns_mode=kb_profile.mode,
+            ken_burns_pan_extent=kb_profile.pan_extent,
+            ken_burns_intro_relief=kb_profile.intro_relief,
+            ken_burns_intro_seconds=kb_profile.intro_seconds,
             font_path=text_cfg.get("font_path"),
             body_font_size=int(text_cfg.get("default_size", 36)),
             body_color=_hex_to_rgb(colors.get("default", "#FFFFFF")),
