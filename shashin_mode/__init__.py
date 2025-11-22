@@ -1,0 +1,2 @@
+"""Shashin mode pipeline package."""
+

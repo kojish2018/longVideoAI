@@ -1,0 +1,31 @@
+# Renderer overrides specific to shashin_mode.
+#
+# `name`: Logical name to show in logs. Use "ffmpeg" (default) for the
+#          Shashin-specific FFmpeg renderer or "moviepy" for the legacy
+#          MoviePy renderer. Any other value requires specifying `class`.
+# `class`: Optional fully-qualified class path for a custom renderer
+#          (e.g. "my_package.renderers.CustomShashinRenderer"). The class
+#          should accept `layout`, `paths`, and `overlay_dir` keyword arguments
+#          or `**kwargs`.
+# `options`: Renderer-specific keyword arguments. For `ffmpeg`, supported
+#            keys include `ffmpeg_path`, `video_codec`, `audio_codec`,
+#            `audio_bitrate`, `audio_sample_rate`, `preset`, `crf`, `threads`,
+#            `pix_fmt`, and `extra_video_flags` (list). For `moviepy`, the
+#            options map directly to MoviePy's `write_videofile` kwargs.
+renderer:
+  name: ffmpeg
+  # class: my_package.renderers.CustomShashinRenderer
+  options:
+    {}
+    # Example overrides (FFmpeg renderer):
+    # ffmpeg_path: /opt/homebrew/bin/ffmpeg
+    # video_codec: libx264
+    # audio_bitrate: 192k
+    # crf: 18
+    # threads: 6
+    # extra_video_flags:
+    #   - "-profile:v"
+    #   - "high"
+
+  # To use the MoviePy renderer instead, change `name` to "moviepy" and
+  # optionally pass write_videofile kwargs via `options`.
