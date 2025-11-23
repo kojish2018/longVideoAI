@@ -165,8 +165,9 @@ class FFmpegShashinRenderer:
         ]
         base_label = "[bg]"
         if image_idx is not None:
-            target_width = int(self.layout.width * self.layout.image_width_ratio)
-            filters.append(f"[{image_idx}:v]scale={target_width}:-1,setsar=1[img]")
+            # 高さを全体の80%に設定し、アスペクト比を維持（幅は-1で自動計算）
+            target_height = int(height * 0.8)
+            filters.append(f"[{image_idx}:v]scale=-1:{target_height},setsar=1[img]")
             filters.append(
                 f"{base_label}[img]overlay=x='(main_w-overlay_w)/2':y={self.layout.image_top_padding_px}:format=auto[bgimg]"
             )

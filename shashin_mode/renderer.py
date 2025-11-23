@@ -116,9 +116,10 @@ class ShashinRenderer:
         return clip.set_duration(duration)
 
     def _prepare_image_clip(self, image_path: Path, duration: float) -> ImageClip:
-        target_width = int(self.layout.width * self.layout.image_width_ratio)
+        # 高さを全体の80%に設定し、アスペクト比を維持
+        target_height = int(self.layout.height * 0.8)
         clip = ImageClip(str(image_path)).set_duration(duration)
-        clip = clip.resize(width=target_width)
+        clip = clip.resize(height=target_height)
         clip = clip.set_position(("center", self.layout.image_top_padding_px))
         return clip
 

@@ -53,14 +53,30 @@ class SubtitleOverlayFactory:
         rect = [(8, 8), (self.layout.width - 8, band_height)]
         draw.rounded_rectangle(rect, radius=radius, fill=self.layout.subtitle_band_color)
 
-        content_width = self.layout.width - 16
-        y = 8 + max((band_height - text_block_height) // 2, 0)
+        # ボックスの中心座標を計算
+        box_center_x = self.layout.width // 2
+        box_center_y = 8 + band_height // 2
+        
+        # テキストブロック全体の中心位置を計算
+        text_start_y = box_center_y - text_block_height // 2
+        
+        # 各行を中央揃えで描画
+        current_y = text_start_y
         for idx, (line, (text_width, text_height)) in enumerate(zip(chunk.lines, text_sizes)):
-            x = 8 + max(int((content_width - text_width) / 2), 0)
-            draw.text((x, y), line, font=font, fill=self.layout.subtitle_color)
-            y += text_height
+            # 各行の中心Y座標を計算
+            line_center_y = current_y + text_height // 2
+            
+            # anchor="mm"で中央揃え（middle-middle）
+            draw.text(
+                (box_center_x, line_center_y),
+                line,
+                font=font,
+                fill=self.layout.subtitle_color,
+                anchor="mm",  # middle-middle: center both horizontally and vertically
+            )
+            current_y += text_height
             if idx < len(chunk.lines) - 1:
-                y += line_spacing
+                current_y += line_spacing
 
         self.overlay_dir.mkdir(parents=True, exist_ok=True)
         output_path = self.overlay_dir / f"overlay_{chunk.index:03d}_{abs(hash(cache_key))}.png"

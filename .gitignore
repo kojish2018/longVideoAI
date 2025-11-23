@@ -21,6 +21,17 @@ longscripts_txt/
 sample_txt/
 visual_img/
 
+# Shashin mode generated artifacts and assets
+shashin_mode/output/
+shashin_mode/logs/
+shashin_mode/referenceimage/
+shashin_mode/tmp/
+shashin_mode/**/*.mp4
+shashin_mode/**/*.wav
+
 # OS-specific cruft
 .DS_Store
 .env
+
+# Pytest cache
+.pytest_cache/

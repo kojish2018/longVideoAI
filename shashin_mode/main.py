@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,94 @@ from .youtube_support import (
     build_youtube_metadata,
     resolve_publish_at_string,
 )
+
+logger = get_logger(__name__)
+
+
+def _interactive_select_thumbnail_images(image_candidates: list[Path]) -> tuple[Path, Path]:
+    """インタラクティブにサムネイル用の2枚の画像を選択する。"""
+    if len(image_candidates) < 2:
+        logger.warning("画像候補が2枚未満のため、自動選択します")
+        if len(image_candidates) == 1:
+            return image_candidates[0], image_candidates[0]
+        raise ValueError("画像候補がありません")
+
+    # 画像フォルダをFinderで開く
+    if image_candidates:
+        image_dir = image_candidates[0].parent
+        try:
+            subprocess.run(["open", str(image_dir)], check=True)
+            print(f"\nFinderで画像フォルダを開きました: {image_dir}")
+            print("画像を確認してから、ターミナルに戻って選択してください。")
+        except subprocess.CalledProcessError:
+            logger.warning("Finderでフォルダを開けませんでした。続行します。")
+        except Exception as e:
+            logger.warning("Finderでフォルダを開く際にエラーが発生しました: %s", e)
+
+    # inquirerライブラリを使って矢印キーで選択できるメニューを表示
+    try:
+        import inquirer
+        
+        # 左側用の画像を選択
+        print("\nサムネイル用の画像を選択してください")
+        choices = [
+            (f"{img_path.name} ({img_path})", idx)
+            for idx, img_path in enumerate(image_candidates)
+        ]
+        
+        questions = [
+            inquirer.List(
+                "left",
+                message="左側用の画像を選択してください",
+                choices=choices,
+                default=choices[0] if choices else None,
+            ),
+        ]
+        left_answer = inquirer.prompt(questions)
+        left_index = left_answer["left"] if left_answer else 0
+        
+        # 右側用の画像を選択
+        questions = [
+            inquirer.List(
+                "right",
+                message="右側用の画像を選択してください",
+                choices=choices,
+                default=choices[1] if len(choices) > 1 else choices[0],
+            ),
+        ]
+        right_answer = inquirer.prompt(questions)
+        right_index = right_answer["right"] if right_answer else (1 if len(choices) > 1 else 0)
+        
+    except ImportError:
+        # inquirerがインストールされていない場合は、シンプルな選択メニューにフォールバック
+        print("\nサムネイル用の画像を選択してください:")
+        print("利用可能な画像候補:")
+        for idx, img_path in enumerate(image_candidates):
+            print(f"  [{idx}] {img_path.name} ({img_path})")
+        
+        def _get_image_index(prompt: str) -> int:
+            while True:
+                try:
+                    user_input = input(f"\n{prompt} [0-{len(image_candidates)-1}]: ").strip()
+                    if not user_input:
+                        continue
+                    index = int(user_input)
+                    if 0 <= index < len(image_candidates):
+                        return index
+                    print(f"エラー: 0から{len(image_candidates)-1}の範囲で入力してください")
+                except ValueError:
+                    print("エラー: 数値を入力してください")
+        
+        left_index = _get_image_index("左側用の画像番号")
+        right_index = _get_image_index("右側用の画像番号")
+
+    selected_left = image_candidates[left_index]
+    selected_right = image_candidates[right_index]
+    print(f"\n選択した画像:")
+    print(f"  左側: {selected_left.name}")
+    print(f"  右側: {selected_right.name}")
+
+    return selected_left, selected_right
 
 
 DEFAULT_BACKGROUND = Path("shashin_mode/assets/sakura.mp4")
@@ -78,6 +167,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--thumbnail-output",
         help="サムネイルPNGの出力パス。未指定なら run_dir/thumbnail.png",
+    )
+    parser.add_argument(
+        "--thumbnail-image1",
+        help="サムネイル左側用の画像パス（手動指定）",
+    )
+    parser.add_argument(
+        "--thumbnail-image2",
+        help="サムネイル右側用の画像パス（手動指定）",
     )
     return parser
 
@@ -165,10 +262,29 @@ def main(argv: Optional[list[str]] = None) -> None:
                 if args.thumbnail_output
                 else result.run_dir / "thumbnail.png"
             )
+            
+            # 画像選択: 手動指定があればそれを使用、なければインタラクティブ選択
+            if args.thumbnail_image1 and args.thumbnail_image2:
+                selected_images = [
+                    Path(args.thumbnail_image1).expanduser(),
+                    Path(args.thumbnail_image2).expanduser(),
+                ]
+                logger.info("手動指定された画像を使用: %s, %s", selected_images[0], selected_images[1])
+            elif len(result.chunk_image_paths) >= 2:
+                # デフォルトでインタラクティブ選択
+                selected_left, selected_right = _interactive_select_thumbnail_images(result.chunk_image_paths)
+                selected_images = [selected_left, selected_right]
+            else:
+                # 候補が2枚未満の場合は自動選択
+                selected_images = result.chunk_image_paths[:2]
+                if len(selected_images) == 1:
+                    selected_images.append(selected_images[0])
+                logger.info("画像候補が少ないため自動選択しました")
+            
             generated = generate_thumbnail(
                 title_text=yellow_text,
                 banner_text=banner_text,
-                image_candidates=result.chunk_image_paths,
+                image_candidates=selected_images,
                 output_path=thumbnail_output,
             )
             if generated:

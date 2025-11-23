@@ -169,9 +169,9 @@ class ImageFetcher:
             image_url = item.get("url") or item.get("thumbnail")
             if not image_url:
                 continue
-            identifier = item.get("id") or str(uuid4())
-            safe_name = self._sanitize_identifier(identifier)
-            target_path = target_dir / f"{safe_name}_{len(results):02d}.jpg"
+            # シンプルな連番形式のファイル名を使用（例: img_01.jpg, img_02.jpg）
+            image_index = len(results) + 1
+            target_path = target_dir / f"img_{image_index:02d}.jpg"
             fetched = self._download_image(image_url, target_path)
             if fetched:
                 results.append(fetched)

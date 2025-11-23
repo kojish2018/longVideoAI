@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from importlib import import_module
@@ -230,12 +231,65 @@ class ShashinPipeline:
         shared_dir = self.paths.image_dir / "shared"
         images = self.image_fetcher.fetch_batch(query, shared_dir, limit=self._shared_batch_size)
         if images:
-            self.shared_images = images
+            # インタラクティブに画像をフィルタリング
+            filtered_images = self._interactive_filter_images(images)
+            self.shared_images = filtered_images
             self._shared_image_index = 0
-            logger.info("Prepared %d shared images from Openverse query: %s", len(images), query)
+            logger.info("Prepared %d shared images from Openverse query: %s (filtered from %d)", len(filtered_images), query, len(images))
         else:
             self.shared_images = []
             logger.warning("Shared Openverse query produced no images; falling back to per-chunk search")
+
+    def _interactive_filter_images(self, images: List[Path]) -> List[Path]:
+        """インタラクティブに画像をフィルタリングする。デフォルトで全選択。"""
+        if not images:
+            return images
+        
+        # 画像フォルダをFinderで開く
+        image_dir = images[0].parent
+        try:
+            subprocess.run(["open", str(image_dir)], check=True)
+            print(f"\nFinderで画像フォルダを開きました: {image_dir}")
+            print("画像を確認してから、ターミナルに戻って選択してください。")
+        except subprocess.CalledProcessError:
+            logger.warning("Finderでフォルダを開けませんでした。続行します。")
+        except Exception as e:
+            logger.warning("Finderでフォルダを開く際にエラーが発生しました: %s", e)
+        
+        # inquirer.Checkboxで選択
+        try:
+            import inquirer
+            
+            # choicesは(表示名, 文字列値)のタプルのリスト
+            # Pathオブジェクトを文字列に変換して、値の比較が確実に動作するようにする
+            choices = [(f"{img.name}", str(img)) for img in images]
+            # defaultには選択された値（文字列パス）のリストを渡す（全選択）
+            default_selected = [str(img) for img in images]
+            
+            questions = [
+                inquirer.Checkbox(
+                    'selected_images',
+                    message="使用する画像を選択してください（スペースでチェック/アンチェック、Enterで確定）",
+                    choices=choices,
+                    default=default_selected,  # デフォルトで全選択
+                ),
+            ]
+            answers = inquirer.prompt(questions)
+            if answers and answers.get('selected_images'):
+                # 選択された文字列パスからPathオブジェクトを復元
+                selected_paths = answers['selected_images']
+                selected = [Path(path_str) for path_str in selected_paths]
+                print(f"\n選択された画像: {len(selected)}枚 / {len(images)}枚")
+                return selected
+            # キャンセルされた場合や何も選択されていない場合は全画像を使用
+            logger.info("画像フィルタリングがキャンセルされたか、選択が空でした。全画像を使用します。")
+            return images
+        except ImportError:
+            logger.warning("inquirerがインストールされていないため、全画像を使用します")
+            return images
+        except KeyboardInterrupt:
+            logger.info("画像フィルタリングが中断されました。全画像を使用します。")
+            return images
 
     def _next_shared_image_path(self) -> Optional[Path]:
         if not self.shared_images:

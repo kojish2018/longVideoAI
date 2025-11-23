@@ -76,7 +76,19 @@ def generate_thumbnail(
         min_size=80,
         max_size=220,
     )
-    banner_font = _load_font(FONT_SECONDARY_CANDIDATES, size=60)
+
+    # Define banner box (subs text area)
+    # Fixed font size: 80px
+    banner_font = _load_font(FONT_SECONDARY_CANDIDATES, size=80)
+    
+    # Calculate text width to determine banner width (text width + 40px padding)
+    text_bbox = banner_font.getbbox(banner_text)
+    text_width = text_bbox[2] - text_bbox[0]
+    banner_box_width = text_width + 40
+    banner_box_height = 120  # Fixed height: 120px
+    
+    banner_box_x0 = 80
+    banner_box_y0 = yellow_top - 160
 
     _draw_centered_text(
         draw,
@@ -92,8 +104,8 @@ def generate_thumbnail(
         canvas,
         text=banner_text,
         font=banner_font,
-        box_size=(650, 80),
-        position=(80, yellow_top - 160),
+        box_size=(banner_box_width, banner_box_height),
+        position=(banner_box_x0, banner_box_y0),
         angle=-8,
     )
 
@@ -180,23 +192,46 @@ def _draw_centered_text(
 ) -> None:
     x0, y0, x1, y1 = box
     max_width = x1 - x0
+    box_center_x = (x0 + x1) // 2
+    box_center_y = (y0 + y1) // 2
+    
     wrapped_lines = _auto_wrap(text, font, max_width)
-    total_height = sum(font.getbbox(line)[3] - font.getbbox(line)[1] for line in wrapped_lines)
-    total_height += (len(wrapped_lines) - 1) * LINE_SPACING
-    current_y = y0 + max(0, (y1 - y0 - total_height) // 2)
+    
+    # Calculate total height of all lines including spacing
+    line_heights = []
+    line_widths = []
     for line in wrapped_lines:
         bbox = font.getbbox(line)
-        line_width = bbox[2] - bbox[0]
-        x = x0 + max(0, (max_width - line_width) // 2)
+        line_heights.append(bbox[3] - bbox[1])
+        line_widths.append(bbox[2] - bbox[0])
+    
+    total_height = sum(line_heights) + (len(wrapped_lines) - 1) * LINE_SPACING
+    
+    # Calculate starting Y position for vertical centering
+    start_y = box_center_y - total_height // 2
+    
+    # Draw each line centered horizontally and vertically
+    current_y = start_y
+    for idx, line in enumerate(wrapped_lines):
+        line_height = line_heights[idx]
+        line_width = line_widths[idx]
+        
+        # Center horizontally
+        x = box_center_x
+        
+        # Center vertically for this line (using anchor="mm" for middle-middle)
+        line_center_y = current_y + line_height // 2
+        
         draw.text(
-            (x, current_y),
+            (x, line_center_y),
             line,
             font=font,
             fill=fill,
             stroke_width=stroke_width,
             stroke_fill=stroke_fill,
+            anchor="mm",  # middle-middle: center both horizontally and vertically
         )
-        current_y += (bbox[3] - bbox[1]) + LINE_SPACING
+        current_y += line_height + LINE_SPACING
 
 
 def _auto_wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
@@ -245,12 +280,17 @@ def _draw_slanted_banner(
     banner_draw = ImageDraw.Draw(banner)
     banner_draw.rectangle([(0, 0), (box_size[0], box_size[1])], fill=WHITE, outline=BLACK, width=6)
 
-    text_bbox = font.getbbox(text)
-    text_width = text_bbox[2] - text_bbox[0]
-    text_height = text_bbox[3] - text_bbox[1]
-    text_x = max(20, (box_size[0] - text_width) // 2)
-    text_y = max(10, (box_size[1] - text_height) // 2)
-    banner_draw.text((text_x, text_y), text, font=font, fill=BANNER_TEXT_COLOR)
+    # Center text in the box using anchor="mm" (middle-middle)
+    box_center_x = box_size[0] // 2
+    box_center_y = box_size[1] // 2
+    
+    banner_draw.text(
+        (box_center_x, box_center_y),
+        text,
+        font=font,
+        fill=BANNER_TEXT_COLOR,
+        anchor="mm",  # middle-middle: center both horizontally and vertically
+    )
 
     rotated = banner.rotate(angle, expand=True, resample=Image.BICUBIC)
     canvas.paste(rotated, position, rotated)
