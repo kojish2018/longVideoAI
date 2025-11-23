@@ -113,6 +113,41 @@ def _interactive_select_thumbnail_images(image_candidates: list[Path]) -> tuple[
 DEFAULT_BACKGROUND = Path("shashin_mode/assets/sakura.mp4")
 
 
+def _normalise_bgm_name(value: str) -> str:
+    """Normalize BGM filename, adding .mp3 extension if missing."""
+    trimmed = str(value).strip()
+    if not trimmed:
+        raise ValueError("Background music name cannot be empty.")
+    if not trimmed.lower().endswith(".mp3"):
+        trimmed = f"{trimmed}.mp3"
+    return trimmed
+
+
+def _apply_background_music(*, config, override: Optional[str] = None) -> tuple[str, str]:
+    """Apply background music settings from config, similar to long_video_main.py"""
+    if not isinstance(config.raw, dict):
+        raise ValueError("Configuration root must be a mapping to select background music.")
+
+    bgm_cfg = config.raw.setdefault("bgm", {})
+    if not isinstance(bgm_cfg, dict):
+        bgm_cfg = {}
+        config.raw["bgm"] = bgm_cfg
+
+    directory = str(bgm_cfg.get("directory") or "background_music").strip()
+    if not directory:
+        directory = "background_music"
+    bgm_cfg["directory"] = directory
+
+    if override:
+        selected = _normalise_bgm_name(override)
+    else:
+        selected_raw = bgm_cfg.get("selected") or "Everet.mp3"
+        selected = _normalise_bgm_name(str(selected_raw))
+
+    bgm_cfg["selected"] = selected
+    return directory, selected
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Shashin mode video generator")
     parser.add_argument("script", help="Path to the input TXT script")
@@ -218,6 +253,15 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     fallback_image = Path(args.fallback_image).expanduser() if args.fallback_image else None
 
+    # BGM設定を読み取り
+    try:
+        bgm_directory, bgm_selected = _apply_background_music(config=config)
+        logger.info("Background music selected: %s (directory: %s)", bgm_selected, bgm_directory)
+    except ValueError as exc:
+        logger.warning("BGM設定の読み取りに失敗しました: %s。デフォルト値を使用します。", exc)
+        bgm_directory = "background_music"
+        bgm_selected = "Everet.mp3"
+
     pipeline = ShashinPipeline(
         layout=layout,
         timing=timing,
@@ -227,6 +271,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         fallback_image=fallback_image,
         voicevox_config=config.raw,
         renderer_settings=renderer_settings,
+        bgm_directory=bgm_directory,
+        bgm_selected=bgm_selected,
     )
 
     script_path = Path(args.script).expanduser()

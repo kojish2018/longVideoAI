@@ -48,6 +48,8 @@ class ShashinPipeline:
         fallback_image: Optional[Path] = None,
         voicevox_config: Optional[dict] = None,
         renderer_settings: Optional[RendererSettings] = None,
+        bgm_directory: str = "background_music",
+        bgm_selected: str = "Everet.mp3",
     ) -> None:
         self.layout = layout
         self.timing = timing
@@ -59,6 +61,8 @@ class ShashinPipeline:
             fallback_image=fallback_image,
         )
         self.renderer_settings = renderer_settings or RendererSettings()
+        self.bgm_directory = bgm_directory
+        self.bgm_selected = bgm_selected
         self.renderer = self._build_renderer(layout, paths)
         self.image_query_prefix = image_query_prefix.strip()
         self.shared_images: List[Path] = []
@@ -179,6 +183,8 @@ class ShashinPipeline:
                 overlay_dir=paths.overlay_dir,
                 ffmpeg_path=ffmpeg_path,
                 options=ffmpeg_options,
+                bgm_directory=self.bgm_directory,
+                bgm_selected=self.bgm_selected,
             )
 
         raise ValueError(

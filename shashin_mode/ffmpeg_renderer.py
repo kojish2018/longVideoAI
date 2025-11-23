@@ -39,12 +39,16 @@ class FFmpegShashinRenderer:
         overlay_dir: Optional[Path] = None,
         ffmpeg_path: str = "ffmpeg",
         options: Optional[Dict[str, object]] = None,
+        bgm_directory: str = "background_music",
+        bgm_selected: str = "Everet.mp3",
     ) -> None:
         self.layout = layout
         self.overlay_dir = overlay_dir or Path("shashin_mode/cache_overlays")
         self.overlay_factory = SubtitleOverlayFactory(layout, self.overlay_dir)
         self.ffmpeg_path = ffmpeg_path
         self.render_opts = self._build_render_options(options or {})
+        self._bgm_directory = bgm_directory
+        self._bgm_selected = bgm_selected
 
     def render(
         self,
@@ -77,6 +81,9 @@ class FFmpegShashinRenderer:
                 fh.write(f"file '{file_path.as_posix()}'\n")
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 連結動画を一時ファイルに出力
+        temp_concat = temp_dir / "concat_temp.mp4"
         concat_cmd = [
             self.ffmpeg_path,
             "-y",
@@ -90,10 +97,21 @@ class FFmpegShashinRenderer:
             "copy",
             "-movflags",
             "+faststart",
-            str(output_path),
+            str(temp_concat),
         ]
         self._run_ffmpeg(concat_cmd, desc="concat chunks")
-        return output_path
+        
+        # BGMミキシングを実行
+        total_duration = sum(chunk.duration for chunk in chunks)
+        final_output = self._mix_bgm(temp_concat, output_path, total_duration=total_duration)
+        
+        # 一時ファイルをクリーンアップ
+        try:
+            temp_concat.unlink(missing_ok=True)
+        except Exception:
+            pass
+        
+        return final_output
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -212,6 +230,104 @@ class FFmpegShashinRenderer:
             flags.extend(opts.extra_video_flags)
         flags += ["-movflags", "+faststart"]
         return flags
+
+    def _mix_bgm(self, input_video: Path, output_path: Path, *, total_duration: float) -> Path:
+        """Mix background music with narration audio using the same logic as long_form/ffmpeg/renderer.py"""
+        bgm_path = self._resolve_bgm_path()
+        if bgm_path is None or not bgm_path.exists():
+            # Fast path: just move/copy streams with faststart
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            args = [
+                self.ffmpeg_path,
+                "-i",
+                str(input_video),
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                "-y",
+                str(output_path),
+            ]
+            self._run_ffmpeg(args, desc="passthrough (no BGM)")
+            return output_path
+
+        # Loop BGM, fade in/out, mix with narration audio (stereo), keep video stream
+        sr = str(self.render_opts.audio_sample_rate)
+        fade_out_st = max(total_duration - 1.0, 0.0)
+        logger.info(
+            "BGM mix: file=%s, total=%.2fs, fade_out_at=%.2fs, bgm_gain=%.2f, stereo=%s",
+            bgm_path,
+            total_duration,
+            fade_out_st,
+            0.24,
+            "on",
+        )
+        filter_complex = (
+            # Prepare BGM: EBU R128 normalize first, then reduce level, fade, and format
+            f"[1:a]atrim=0:duration={total_duration:.3f},asetpts=PTS-STARTPTS,"
+            f"loudnorm=I=-30:LRA=7:TP=-2,"
+            f"volume=0.24,afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out_st:.3f}:d=1.0,"
+            f"aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo[bgm];"
+            # Prepare narration: force stereo @ sample rate
+            f"[0:a]aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo[narr];"
+            # Mix 2 inputs, duration=first keeps final length tied to video/narration
+            f"[narr][bgm]amix=inputs=2:duration=first:dropout_transition=2[a];"
+            # Final loudness normalization for the whole program
+            f"[a]loudnorm=I=-14:LRA=7:TP=-1.5,"
+            f"aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo[aout]"
+        )
+        args: List[str] = [
+            self.ffmpeg_path,
+            "-i",
+            str(input_video),
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(bgm_path),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "0:v",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            self.render_opts.audio_codec,
+            "-ar",
+            sr,
+            "-ac",
+            "2",
+        ]
+        if self.render_opts.audio_bitrate:
+            args += ["-b:a", str(self.render_opts.audio_bitrate)]
+        args += ["-movflags", "+faststart", "-shortest", "-y", str(output_path)]
+        self._run_ffmpeg(args, desc="mix BGM")
+        return output_path
+
+    def _resolve_bgm_path(self) -> Optional[Path]:
+        """Resolve BGM file path, similar to long_form/ffmpeg/renderer.py"""
+        if not getattr(self, "_bgm_selected", None):
+            return None
+
+        candidates: List[Path] = []
+        selected_path = Path(self._bgm_selected)
+        if not selected_path.is_absolute():
+            candidates.append(Path(self._bgm_directory) / self._bgm_selected)
+        candidates.append(selected_path)
+
+        for candidate in candidates:
+            try:
+                if candidate.exists():
+                    return candidate
+            except Exception:
+                continue
+        logger.warning(
+            "BGM file not found; falling back to passthrough. selection=%s directory=%s",
+            self._bgm_selected,
+            self._bgm_directory,
+        )
+        return None
 
     def _run_ffmpeg(self, cmd: List[str], *, desc: str) -> None:
         logger.info("FFmpeg (%s): %s", desc, shlex.join(cmd))
