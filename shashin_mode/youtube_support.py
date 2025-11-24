@@ -178,7 +178,7 @@ def build_youtube_metadata(
     description_override: Optional[str],
     tags_override: Optional[str],
 ) -> YouTubeMetadata:
-    title = (title_override or _extract_title_from_document(script_doc)).strip() or "AI Generated Video"
+    title = (title_override or _extract_title_from_document(script_doc)).strip() or ""
 
     if description_override:
         description = description_override.strip()
@@ -195,7 +195,7 @@ def _extract_title_from_document(document: ScriptDocument) -> str:
             cleaned = line.strip()
             if cleaned:
                 return cleaned[:100]
-    return "AI Generated Video"
+    return ""
 
 
 def _build_description(config: AppConfig, title: str, total_duration: float) -> str:

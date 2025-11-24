@@ -50,6 +50,7 @@ class ShashinPipeline:
         renderer_settings: Optional[RendererSettings] = None,
         bgm_directory: str = "background_music",
         bgm_selected: str = "Everet.mp3",
+        chunks_per_image: int = 2,
     ) -> None:
         self.layout = layout
         self.timing = timing
@@ -68,6 +69,9 @@ class ShashinPipeline:
         self.shared_images: List[Path] = []
         self._shared_image_index = 0
         self._shared_batch_size = 10
+        self.chunks_per_image = max(1, chunks_per_image)  # 最低1チャンク
+        self._last_image_path: Optional[Path] = None
+        self._last_image_group_index: Optional[int] = None
 
     def run(
         self,
@@ -83,8 +87,7 @@ class ShashinPipeline:
         chunks = script_doc.chunks
         logger.info("Preparing assets for %d chunks", len(chunks))
 
-        if script_doc.shared_openverse_query:
-            self._prepare_shared_openverse_images(script_doc.shared_openverse_query)
+        self._prepare_shared_images(script_doc)
 
         render_chunks: List[RenderChunk] = []
         subtitles: List[SubtitleEntry] = []
@@ -219,32 +222,105 @@ class ShashinPipeline:
 
     def _fetch_image_for_chunk(self, chunk: SubtitleChunk) -> Optional[Path]:
         base_text = chunk.query_text
-        query_source = chunk.openverse_query or base_text
+        target_path = self.paths.image_dir / f"chunk_{chunk.index:03d}.jpg"
+        
+        # icrawlerマーカーがある場合
+        if chunk.icrawler_query:
+            logger.info("Using icrawler marker for chunk %03d: %s", chunk.index, chunk.icrawler_query)
+            query = f"{self.image_query_prefix} {chunk.icrawler_query}".strip() if self.image_query_prefix else chunk.icrawler_query
+            fetched = self.image_fetcher.fetch(query, target_path, provider_override="icrawler")
+            if fetched:
+                self._last_image_path = fetched
+                self._last_image_group_index = (chunk.index - 1) // self.chunks_per_image
+            return fetched
+        
+        # openverseマーカーがある場合
         if chunk.openverse_query:
             logger.info("Using Openverse marker for chunk %03d: %s", chunk.index, chunk.openverse_query)
-        target_path = self.paths.image_dir / f"chunk_{chunk.index:03d}.jpg"
-        if not chunk.openverse_query and self.shared_images:
+            query = f"{self.image_query_prefix} {chunk.openverse_query}".strip() if self.image_query_prefix else chunk.openverse_query
+            fetched = self.image_fetcher.fetch(query, target_path, provider_override="openverse")
+            if fetched:
+                self._last_image_path = fetched
+                self._last_image_group_index = (chunk.index - 1) // self.chunks_per_image
+            return fetched
+        
+        # マーカーがない場合、画像を使い回すか共有画像を使用
+        current_group_index = (chunk.index - 1) // self.chunks_per_image
+        
+        # 前回の画像と同じグループなら、前回の画像をコピーして使い回す
+        if (
+            self._last_image_path
+            and self._last_image_group_index is not None
+            and self._last_image_group_index == current_group_index
+            and self._last_image_path.exists()
+        ):
+            try:
+                copied = self._copy_shared_image(self._last_image_path, target_path)
+                if copied:
+                    logger.debug("Reusing image for chunk %03d (group %d)", chunk.index, current_group_index)
+                    return copied
+            except Exception as exc:
+                logger.warning("Failed to reuse image for chunk %03d: %s", chunk.index, exc)
+        
+        # 共有画像を使用（openverse/icrawler共通）
+        if self.shared_images:
             shared_source = self._next_shared_image_path()
             if shared_source:
                 copied = self._copy_shared_image(shared_source, target_path)
                 if copied:
+                    self._last_image_path = copied
+                    self._last_image_group_index = current_group_index
                     return copied
 
+        # デフォルトプロバイダーで取得
+        query_source = base_text
         query = f"{self.image_query_prefix} {query_source}".strip() if self.image_query_prefix else query_source
-        return self.image_fetcher.fetch(query, target_path)
+        fetched = self.image_fetcher.fetch(query, target_path)
+        if fetched:
+            self._last_image_path = fetched
+            self._last_image_group_index = current_group_index
+        return fetched
 
-    def _prepare_shared_openverse_images(self, query: str) -> None:
+    def _prepare_shared_images(self, script_doc: ScriptDocument) -> None:
+        """Prepare shared images from openverse or icrawler queries."""
         shared_dir = self.paths.image_dir / "shared"
-        images = self.image_fetcher.fetch_batch(query, shared_dir, limit=self._shared_batch_size)
-        if images:
-            # インタラクティブに画像をフィルタリング
-            filtered_images = self._interactive_filter_images(images)
-            self.shared_images = filtered_images
-            self._shared_image_index = 0
-            logger.info("Prepared %d shared images from Openverse query: %s (filtered from %d)", len(filtered_images), query, len(images))
-        else:
-            self.shared_images = []
-            logger.warning("Shared Openverse query produced no images; falling back to per-chunk search")
+        
+        # Openverseの場合
+        if script_doc.shared_openverse_query:
+            images = self.image_fetcher.fetch_batch(
+                script_doc.shared_openverse_query,
+                shared_dir,
+                limit=self._shared_batch_size,
+                provider_override="openverse"
+            )
+            if images:
+                # インタラクティブに画像をフィルタリング
+                filtered_images = self._interactive_filter_images(images)
+                self.shared_images = filtered_images
+                self._shared_image_index = 0
+                logger.info("Prepared %d shared images from Openverse query: %s (filtered from %d)", len(filtered_images), script_doc.shared_openverse_query, len(images))
+            else:
+                self.shared_images = []
+                logger.warning("Shared Openverse query produced no images; falling back to per-chunk search")
+        
+        # icrawlerの場合
+        if script_doc.shared_icrawler_query:
+            images = self.image_fetcher.fetch_batch(
+                script_doc.shared_icrawler_query,
+                shared_dir,
+                limit=self._shared_batch_size,
+                provider_override="icrawler"
+            )
+            if images:
+                # インタラクティブに画像をフィルタリング
+                filtered_images = self._interactive_filter_images(images)
+                self.shared_images = filtered_images
+                self._shared_image_index = 0
+                logger.info("Prepared %d shared images from icrawler query: %s (filtered from %d)", len(filtered_images), script_doc.shared_icrawler_query, len(images))
+            else:
+                if not self.shared_images:  # openverseで既に取得済みの場合は上書きしない
+                    self.shared_images = []
+                logger.warning("Shared icrawler query produced no images; falling back to per-chunk search")
 
     def _interactive_filter_images(self, images: List[Path]) -> List[Path]:
         """インタラクティブに画像をフィルタリングする。デフォルトで全選択。"""

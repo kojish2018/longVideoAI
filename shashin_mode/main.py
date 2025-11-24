@@ -362,7 +362,7 @@ def main(argv: Optional[list[str]] = None) -> None:
                 description=metadata.description,
                 tags=metadata.tags,
                 publish_at=resolved_publish_at,
-                thumbnail_path=None,
+                thumbnail_path=thumbnail_path,
             )
             if youtube_video_id:
                 logger.info("YouTube へのアップロードが完了しました: https://www.youtube.com/watch?v=%s", youtube_video_id)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import random
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -64,7 +65,7 @@ class ImageFetcher:
                 or "https://api.bing.microsoft.com/v7.0/images/search"
             )
 
-    def fetch(self, query: str, target_path: Path) -> Optional[Path]:
+    def fetch(self, query: str, target_path: Path, *, provider_override: Optional[str] = None) -> Optional[Path]:
         normalized = query.strip()
         if not normalized:
             logger.warning("Image query is empty; using fallback image")
@@ -79,21 +80,23 @@ class ImageFetcher:
                     target_path.write_bytes(existing.read_bytes())
             return target_path
 
+        provider = provider_override or self.provider
         fetcher = {
             "openverse": self._fetch_from_openverse,
             "bing_api": self._fetch_from_bing_api,
             "google": self._fetch_from_google,
             "bing": self._fetch_from_bing,
+            "icrawler": self._fetch_from_icrawler,
             "local": self._fetch_local_only,
             "none": self._fetch_local_only,
-        }.get(self.provider, self._fetch_from_openverse)
+        }.get(provider, self._fetch_from_openverse)
 
         fetched = fetcher(normalized, target_path)
         if fetched and fetched.exists():
             self._cache[normalized] = fetched
             return fetched
 
-        logger.warning("Search provider failed (%s); using fallback", self.provider)
+        logger.warning("Search provider failed (%s); using fallback", provider)
         return self._fallback_image(target_path)
 
     # ------------------------------------------------------------------ #
@@ -134,17 +137,25 @@ class ImageFetcher:
         logger.warning("Openverse returned no usable images for query: %s", query)
         return self._fetch_from_bing_api(query, target_path)
 
-    def fetch_batch(self, query: str, target_dir: Path, *, limit: int = 10) -> List[Path]:
+    def fetch_batch(self, query: str, target_dir: Path, *, limit: int = 10, provider_override: Optional[str] = None) -> List[Path]:
         normalized = query.strip()
         if not normalized:
-            logger.warning("Batch image query is empty; skipping Openverse batch fetch")
+            logger.warning("Batch image query is empty; skipping batch fetch")
             return []
         if limit <= 0:
             logger.warning("Batch image limit must be positive; received %s", limit)
             return []
 
+        provider = provider_override or self.provider
+        if provider == "icrawler":
+            return self._fetch_batch_from_icrawler(normalized, target_dir, limit=limit)
+        else:
+            # Default to openverse
+            return self._fetch_batch_from_openverse(normalized, target_dir, limit=limit)
+
+    def _fetch_batch_from_openverse(self, query: str, target_dir: Path, *, limit: int = 10) -> List[Path]:
         url = "https://api.openverse.org/v1/images"
-        params = self._build_openverse_params(normalized, page_size=limit)
+        params = self._build_openverse_params(query, page_size=limit)
         try:
             response = self._session.get(url, params=params, timeout=20)
             response.raise_for_status()
@@ -241,6 +252,86 @@ class ImageFetcher:
         except requests.RequestException as exc:
             logger.error("Bing image scrape failed: %s", exc)
             return None
+
+    def _fetch_from_icrawler(self, query: str, target_path: Path) -> Optional[Path]:
+        """Fetch a single image using icrawler (BingImageCrawler)."""
+        try:
+            from icrawler.builtin import BingImageCrawler
+        except ImportError:
+            logger.error("icrawler is not installed. Install it with: pip install icrawler")
+            return self._fetch_from_bing_api(query, target_path)
+        
+        import tempfile
+        import shutil
+        
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            storage = {'root_dir': str(temp_dir)}
+            crawler = BingImageCrawler(storage=storage)
+            crawler.crawl(keyword=query, max_num=1)
+            
+            # Find downloaded image
+            downloaded_files = list(temp_dir.glob("*"))
+            for file_path in downloaded_files:
+                if file_path.is_file() and file_path.suffix.lower() in {'.jpg', '.jpeg', '.png', '.gif'}:
+                    # Copy to target path
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    final_path = self._ensure_jpeg(file_path)
+                    shutil.copy2(final_path, target_path)
+                    logger.info("Downloaded image via icrawler: %s", target_path.name)
+                    return target_path
+            
+            logger.warning("icrawler returned no usable images for query: %s", query)
+            return self._fetch_from_bing_api(query, target_path)
+        except Exception as exc:
+            logger.error("icrawler fetch failed: %s", exc)
+            return self._fetch_from_bing_api(query, target_path)
+        finally:
+            # Cleanup temp directory
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    def _fetch_batch_from_icrawler(self, query: str, target_dir: Path, *, limit: int = 10) -> List[Path]:
+        """Fetch multiple images using icrawler (BingImageCrawler), similar to openverse fetch_batch."""
+        try:
+            from icrawler.builtin import BingImageCrawler
+        except ImportError:
+            logger.error("icrawler is not installed. Install it with: pip install icrawler")
+            return []
+        
+        target_dir.mkdir(parents=True, exist_ok=True)
+        storage = {'root_dir': str(target_dir)}
+        
+        try:
+            crawler = BingImageCrawler(storage=storage)
+            crawler.crawl(keyword=query, max_num=limit)
+            
+            # Find downloaded images
+            downloaded_files = sorted([f for f in target_dir.glob("*") if f.is_file() and f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.gif'}])
+            
+            results: List[Path] = []
+            for idx, file_path in enumerate(downloaded_files[:limit], start=1):
+                # Rename to sequential format (img_01.jpg, img_02.jpg)
+                new_path = target_dir / f"img_{idx:02d}.jpg"
+                if new_path != file_path:
+                    try:
+                        final_path = self._ensure_jpeg(file_path)
+                        shutil.move(str(final_path), str(new_path))
+                    except Exception as exc:
+                        logger.warning("Failed to rename icrawler image %s: %s", file_path.name, exc)
+                        continue
+                results.append(new_path)
+            
+            if not results:
+                logger.warning("icrawler returned no usable images for batch query: %s", query)
+            else:
+                logger.info("Fetched %d shared images via icrawler for query: %s", len(results), query)
+            return results
+        except Exception as exc:
+            logger.error("icrawler batch fetch failed: %s", exc)
+            return []
 
     def _fetch_local_only(self, _query: str, target_path: Path) -> Optional[Path]:
         return self._fallback_image(target_path)
