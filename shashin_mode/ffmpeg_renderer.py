@@ -59,6 +59,10 @@ class FFmpegShashinRenderer:
         temp_dir: Path,
     ) -> Path:
         temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 背景動画の長さを1回だけ取得
+        bg_duration = self._get_background_duration(background)
+        
         chunk_files: List[Path] = []
         for chunk in chunks:
             overlay_path, overlay_height = self.overlay_factory.create_overlay(chunk.chunk, chunk.duration)
@@ -68,6 +72,7 @@ class FFmpegShashinRenderer:
                 render_chunk=chunk,
                 overlay_path=overlay_path,
                 overlay_height=overlay_height,
+                bg_duration=bg_duration,
                 output_path=chunk_file,
             )
             chunk_files.append(chunk_file.resolve())
@@ -117,6 +122,32 @@ class FFmpegShashinRenderer:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _get_background_duration(self, background: Path) -> float:
+        """背景動画の長さを取得"""
+        try:
+            ffprobe_path = self.ffmpeg_path.replace("ffmpeg", "ffprobe")
+            if not Path(ffprobe_path).exists():
+                ffprobe_path = "ffprobe"
+            
+            result = subprocess.run(
+                [
+                    ffprobe_path,
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(background),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            duration = float(result.stdout.strip())
+            logger.info("Background video duration: %.2f seconds", duration)
+            return duration
+        except Exception as e:
+            logger.warning("Failed to get background duration, assuming 10 seconds: %s", e)
+            return 10.0
+
     def _render_chunk(
         self,
         *,
@@ -124,6 +155,7 @@ class FFmpegShashinRenderer:
         render_chunk: RenderChunk,
         overlay_path: Path,
         overlay_height: int,
+        bg_duration: float,
         output_path: Path,
     ) -> None:
         duration = max(render_chunk.duration, 0.01)
@@ -146,6 +178,8 @@ class FFmpegShashinRenderer:
 
         filter_graph = self._build_filter_graph(
             duration=duration,
+            start_offset=render_chunk.start,
+            bg_duration=bg_duration,
             background_idx=0,
             image_idx=image_idx,
             overlay_idx=overlay_idx,
@@ -170,6 +204,8 @@ class FFmpegShashinRenderer:
         self,
         *,
         duration: float,
+        start_offset: float,
+        bg_duration: float,
         background_idx: int,
         image_idx: Optional[int],
         overlay_idx: int,
@@ -178,8 +214,12 @@ class FFmpegShashinRenderer:
         width = self.layout.width
         height = self.layout.height
         fps = self.layout.fps
+        
+        # 背景動画の長さで割った余りを使う → 修正前と同じ速度！
+        actual_offset = start_offset % bg_duration if bg_duration > 0 else 0.0
+        
         filters = [
-            f"[{background_idx}:v]scale={width}:{height},setsar=1,fps={fps},trim=0:{duration:.6f},setpts=PTS-STARTPTS[bg]",
+            f"[{background_idx}:v]scale={width}:{height},setsar=1,fps={fps},trim={actual_offset:.6f}:{actual_offset + duration:.6f},setpts=PTS-STARTPTS[bg]",
         ]
         base_label = "[bg]"
         if image_idx is not None:
