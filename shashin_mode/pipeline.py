@@ -20,6 +20,7 @@ from .ffmpeg_renderer import FFmpegShashinRenderer
 from .renderer import RenderChunk, ShashinRenderer
 from .script_loader import ScriptDocument, SubtitleChunk, load_script
 from .subtitle_writer import SubtitleEntry, write_srt
+from .text_density import TextDensityDetector
 
 logger = get_logger(__name__)
 
@@ -33,6 +34,7 @@ class PipelineResult:
     run_dir: Path
     total_duration: float
     chunk_image_paths: List[Path] = field(default_factory=list)
+    shared_image_paths: List[Path] = field(default_factory=list)
     thumbnail_path: Optional[Path] = None
 
 
@@ -49,8 +51,9 @@ class ShashinPipeline:
         voicevox_config: Optional[dict] = None,
         renderer_settings: Optional[RendererSettings] = None,
         bgm_directory: str = "background_music",
-        bgm_selected: str = "Everet.mp3",
+        bgm_selected: str = "Countrysky.mp3",
         chunks_per_image: int = 2,
+        auto_mode: bool = False,
     ) -> None:
         self.layout = layout
         self.timing = timing
@@ -72,6 +75,8 @@ class ShashinPipeline:
         self.chunks_per_image = max(1, chunks_per_image)  # 最低1チャンク
         self._last_image_path: Optional[Path] = None
         self._last_image_group_index: Optional[int] = None
+        self.auto_mode = auto_mode
+        self.text_detector = TextDensityDetector()
 
     def run(
         self,
@@ -88,6 +93,7 @@ class ShashinPipeline:
         logger.info("Preparing assets for %d chunks", len(chunks))
 
         self._prepare_shared_images(script_doc)
+        shared_image_paths: List[Path] = [path for path in self.shared_images if Path(path).exists()]
 
         render_chunks: List[RenderChunk] = []
         subtitles: List[SubtitleEntry] = []
@@ -139,6 +145,7 @@ class ShashinPipeline:
             run_dir=self.paths.run_dir,
             total_duration=current_start,
             chunk_image_paths=chunk_image_paths,
+            shared_image_paths=shared_image_paths,
         )
 
     # ------------------------------------------------------------------ #
@@ -294,8 +301,9 @@ class ShashinPipeline:
                 provider_override="openverse"
             )
             if images:
-                # インタラクティブに画像をフィルタリング
-                filtered_images = self._interactive_filter_images(images)
+                # 自動モードの場合は全画像を自動選択、そうでなければインタラクティブに選択
+                filtered_images = self._interactive_filter_images(images, auto_mode=self.auto_mode)
+                filtered_images = self._filter_text_heavy_images(filtered_images, reason="openverse shared")
                 self.shared_images = filtered_images
                 self._shared_image_index = 0
                 logger.info("Prepared %d shared images from Openverse query: %s (filtered from %d)", len(filtered_images), script_doc.shared_openverse_query, len(images))
@@ -312,8 +320,9 @@ class ShashinPipeline:
                 provider_override="icrawler"
             )
             if images:
-                # インタラクティブに画像をフィルタリング
-                filtered_images = self._interactive_filter_images(images)
+                # 自動モードの場合は全画像を自動選択、そうでなければインタラクティブに選択
+                filtered_images = self._interactive_filter_images(images, auto_mode=self.auto_mode)
+                filtered_images = self._filter_text_heavy_images(filtered_images, reason="icrawler shared")
                 self.shared_images = filtered_images
                 self._shared_image_index = 0
                 logger.info("Prepared %d shared images from icrawler query: %s (filtered from %d)", len(filtered_images), script_doc.shared_icrawler_query, len(images))
@@ -322,9 +331,14 @@ class ShashinPipeline:
                     self.shared_images = []
                 logger.warning("Shared icrawler query produced no images; falling back to per-chunk search")
 
-    def _interactive_filter_images(self, images: List[Path]) -> List[Path]:
+    def _interactive_filter_images(self, images: List[Path], auto_mode: bool = False) -> List[Path]:
         """インタラクティブに画像をフィルタリングする。デフォルトで全選択。"""
         if not images:
+            return images
+        
+        # 自動モードの場合は全画像を自動選択
+        if auto_mode:
+            logger.info("自動モードのため、全画像を自動選択します: %d枚", len(images))
             return images
         
         # 画像フォルダをFinderで開く
@@ -379,6 +393,28 @@ class ShashinPipeline:
         path = self.shared_images[self._shared_image_index % len(self.shared_images)]
         self._shared_image_index += 1
         return path
+
+    def _filter_text_heavy_images(self, images: List[Path], *, reason: str) -> List[Path]:
+        if not images or not self.text_detector.available:
+            return images
+
+        kept: List[Path] = []
+        for image_path in images:
+            if not image_path or not Path(image_path).exists():
+                continue
+            if self.text_detector.is_text_heavy(image_path):
+                logger.info("Excluding text-heavy image (%s): %s", reason, image_path.name)
+                continue
+            kept.append(image_path)
+
+        if kept:
+            return kept
+
+        logger.warning(
+            "All %s images were flagged as text-heavy; keeping original list to avoid empty selection",
+            reason,
+        )
+        return images
 
     def _copy_shared_image(self, source: Path, target: Path) -> Optional[Path]:
         try:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import random
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,72 @@ from .youtube_support import (
 )
 
 logger = get_logger(__name__)
+
+SHIKOKU_METAN_AMAAAMA_ID = 0
+
+# ヒラギノ明朝のパス候補（macOS標準）
+HIRAGINO_MINCHO_CANDIDATES = [
+    "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
+    "/System/Library/Fonts/ヒラギノ明朝 Pro.ttc",
+    "/Library/Fonts/ヒラギノ明朝 ProN.ttc",
+]
+
+
+def _resolve_subtitle_font(user_specified: Optional[str]) -> Optional[str]:
+    """字幕フォントパスを解決。未指定ならヒラギノ明朝を試す。"""
+    if user_specified:
+        return user_specified
+    
+    # ヒラギノ明朝の候補を順に試す
+    for candidate in HIRAGINO_MINCHO_CANDIDATES:
+        candidate_path = Path(candidate)
+        if candidate_path.exists():
+            logger.info("Using default font: %s", candidate)
+            return candidate
+    
+    # 見つからない場合はNone（フォールバックに任せる）
+    logger.info("ヒラギノ明朝が見つかりません。デフォルトフォントを使用します。")
+    return None
+
+
+def _apply_shikoku_metan_voice(config) -> None:
+    """Shashin mode 専用で VOICEVOX を四国めたん「あまあま」に固定する。"""
+    raw = getattr(config, "raw", None)
+    if not isinstance(raw, dict):
+        logger.warning("config.raw が dict ではないため VOICEVOX 上書きをスキップします")
+        return
+
+    apis = raw.setdefault("apis", {})
+    if not isinstance(apis, dict):
+        logger.warning("apis セクションが dict ではないため VOICEVOX 上書きをスキップします")
+        return
+
+    voicevox_cfg = dict(apis.get("voicevox") or {})
+    voicevox_cfg.update(
+        {
+            "speaker_id": SHIKOKU_METAN_AMAAAMA_ID,
+            "profile": "shashin_metan_amaama",
+        }
+    )
+    apis["voicevox"] = voicevox_cfg
+
+    profiles = apis.setdefault("voicevox_profiles", {})
+    if isinstance(profiles, dict):
+        profiles.setdefault(
+            "shashin_metan_amaama",
+            {
+                "speaker_id": SHIKOKU_METAN_AMAAAMA_ID,
+                "speed_scale": voicevox_cfg.get("speed_scale", 0.95),
+                "volume_scale": voicevox_cfg.get("volume_scale", 1.4),
+                "intonation_scale": voicevox_cfg.get("intonation_scale", 1.3),
+                "pitch_scale": voicevox_cfg.get("pitch_scale", -0.05),
+            },
+        )
+
+    logger.info(
+        "Shashin mode voice override applied: 四国めたん(あまあま) speaker_id=%s",
+        SHIKOKU_METAN_AMAAAMA_ID,
+    )
 
 
 def _interactive_select_thumbnail_images(image_candidates: list[Path]) -> tuple[Path, Path]:
@@ -141,7 +208,7 @@ def _apply_background_music(*, config, override: Optional[str] = None) -> tuple[
     if override:
         selected = _normalise_bgm_name(override)
     else:
-        selected_raw = bgm_cfg.get("selected") or "Everet.mp3"
+        selected_raw = bgm_cfg.get("selected") or "Countrysky.mp3"
         selected = _normalise_bgm_name(str(selected_raw))
 
     bgm_cfg["selected"] = selected
@@ -177,7 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--subtitle-font", help="字幕用フォントファイルへのパス")
-    parser.add_argument("--subtitle-size", type=int, default=40)
+    parser.add_argument("--subtitle-size", type=int, default=60)
     parser.add_argument("--chunk-padding", type=float, default=0.35, help="音声長に足す余白秒数")
     parser.add_argument("--min-chunk-duration", type=float, default=1.4, help="チャンクの最小秒数")
     parser.add_argument("--upload", action="store_true", help="レンダリング後に YouTube へアップロード")
@@ -211,6 +278,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--thumbnail-image2",
         help="サムネイル右側用の画像パス（手動指定）",
     )
+    parser.add_argument(
+        "--random-thumbnail",
+        action="store_true",
+        help="サムネイル画像をランダムに選択（自動化パイプライン用）",
+    )
     return parser
 
 
@@ -219,6 +291,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     args = parser.parse_args(argv)
 
     config = load_config(args.config, project_root=Path.cwd())
+    _apply_shikoku_metan_voice(config)
 
     if args.upload or args.youtube_channel:
         try:
@@ -236,7 +309,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         width=args.width,
         height=args.height,
         fps=args.fps,
-        subtitle_font_path=args.subtitle_font,
+        subtitle_font_path=_resolve_subtitle_font(args.subtitle_font),
         subtitle_font_size=args.subtitle_size,
     )
     timing = TimingConfig(
@@ -260,7 +333,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     except ValueError as exc:
         logger.warning("BGM設定の読み取りに失敗しました: %s。デフォルト値を使用します。", exc)
         bgm_directory = "background_music"
-        bgm_selected = "Everet.mp3"
+        bgm_selected = "Countrysky.mp3"
 
     pipeline = ShashinPipeline(
         layout=layout,
@@ -273,6 +346,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         renderer_settings=renderer_settings,
         bgm_directory=bgm_directory,
         bgm_selected=bgm_selected,
+        auto_mode=args.random_thumbnail,  # --random-thumbnailが指定されている場合は自動モード
     )
 
     script_path = Path(args.script).expanduser()
@@ -292,6 +366,9 @@ def main(argv: Optional[list[str]] = None) -> None:
         output_path=output_path,
         script_doc=script_doc,
     )
+    thumbnail_candidates: list[Path] = (
+        result.shared_image_paths if result.shared_image_paths else result.chunk_image_paths
+    )
 
     thumbnail_path: Optional[Path] = None
     if not args.skip_thumbnail:
@@ -300,7 +377,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         banner_text = script_doc.thumbnail_title
         if not yellow_text or not banner_text:
             logger.info("サムネイル生成をスキップ: mains/subs テキストが不足しています")
-        elif not result.chunk_image_paths:
+        elif not thumbnail_candidates:
             logger.warning("サムネイル生成をスキップ: 画像候補がありません")
         else:
             thumbnail_output = (
@@ -309,20 +386,26 @@ def main(argv: Optional[list[str]] = None) -> None:
                 else result.run_dir / "thumbnail.png"
             )
             
-            # 画像選択: 手動指定があればそれを使用、なければインタラクティブ選択
+            # 画像選択: 手動指定があればそれを使用、ランダム選択フラグがあればランダム選択、なければインタラクティブ選択
             if args.thumbnail_image1 and args.thumbnail_image2:
                 selected_images = [
                     Path(args.thumbnail_image1).expanduser(),
                     Path(args.thumbnail_image2).expanduser(),
                 ]
                 logger.info("手動指定された画像を使用: %s, %s", selected_images[0], selected_images[1])
-            elif len(result.chunk_image_paths) >= 2:
+            elif args.random_thumbnail and len(thumbnail_candidates) >= 2:
+                # ランダム選択（自動化パイプライン用）
+                selected_images = random.sample(thumbnail_candidates, min(2, len(thumbnail_candidates)))
+                if len(selected_images) == 1:
+                    selected_images.append(selected_images[0])
+                logger.info("ランダム選択された画像を使用: %s, %s", selected_images[0].name, selected_images[1].name)
+            elif len(thumbnail_candidates) >= 2:
                 # デフォルトでインタラクティブ選択
-                selected_left, selected_right = _interactive_select_thumbnail_images(result.chunk_image_paths)
+                selected_left, selected_right = _interactive_select_thumbnail_images(thumbnail_candidates)
                 selected_images = [selected_left, selected_right]
             else:
                 # 候補が2枚未満の場合は自動選択
-                selected_images = result.chunk_image_paths[:2]
+                selected_images = thumbnail_candidates[:2]
                 if len(selected_images) == 1:
                     selected_images.append(selected_images[0])
                 logger.info("画像候補が少ないため自動選択しました")

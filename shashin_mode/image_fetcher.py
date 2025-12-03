@@ -175,8 +175,6 @@ class ImageFetcher:
         results: List[Path] = []
         target_dir.mkdir(parents=True, exist_ok=True)
         for item in data.get("results") or []:
-            if len(results) >= limit:
-                break
             image_url = item.get("url") or item.get("thumbnail")
             if not image_url:
                 continue
@@ -185,12 +183,20 @@ class ImageFetcher:
             target_path = target_dir / f"img_{image_index:02d}.jpg"
             fetched = self._download_image(image_url, target_path)
             if fetched:
-                results.append(fetched)
+                # アスペクト比をチェック（9:16 から 16:9 の範囲内）
+                if self._check_aspect_ratio(fetched):
+                        results.append(fetched)
+                else:
+                    # 範囲外の画像を削除
+                    try:
+                        fetched.unlink()
+                    except Exception:
+                        pass
 
         if not results:
             logger.warning("Openverse returned no usable images for batch query: %s", query)
         else:
-            logger.info("Fetched %d shared Openverse images for query: %s", len(results), query)
+            logger.info("Fetched %d shared Openverse images (aspect ratio filtered) for query: %s", len(results), query)
         return results
 
     def _fetch_from_bing_api(self, query: str, target_path: Path) -> Optional[Path]:
@@ -312,9 +318,13 @@ class ImageFetcher:
             downloaded_files = sorted([f for f in target_dir.glob("*") if f.is_file() and f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.gif'}])
             
             results: List[Path] = []
-            for idx, file_path in enumerate(downloaded_files[:limit], start=1):
+            valid_count = 0
+            for file_path in downloaded_files:
+                if valid_count >= limit:
+                    break
+                
                 # Rename to sequential format (img_01.jpg, img_02.jpg)
-                new_path = target_dir / f"img_{idx:02d}.jpg"
+                new_path = target_dir / f"img_{valid_count + 1:02d}.jpg"
                 if new_path != file_path:
                     try:
                         final_path = self._ensure_jpeg(file_path)
@@ -322,12 +332,30 @@ class ImageFetcher:
                     except Exception as exc:
                         logger.warning("Failed to rename icrawler image %s: %s", file_path.name, exc)
                         continue
-                results.append(new_path)
+                
+                # アスペクト比をチェック（9:16 から 16:9 の範囲内）
+                if self._check_aspect_ratio(new_path):
+                    results.append(new_path)
+                    valid_count += 1
+                else:
+                    # 範囲外の画像を削除
+                    try:
+                        new_path.unlink()
+                    except Exception:
+                        pass
+            
+            # 不要になったファイルをクリーンアップ
+            for file_path in downloaded_files:
+                if file_path not in results and file_path.exists():
+                    try:
+                        file_path.unlink()
+                    except Exception:
+                        pass
             
             if not results:
                 logger.warning("icrawler returned no usable images for batch query: %s", query)
             else:
-                logger.info("Fetched %d shared images via icrawler for query: %s", len(results), query)
+                logger.info("Fetched %d shared images via icrawler (aspect ratio filtered) for query: %s", len(results), query)
             return results
         except Exception as exc:
             logger.error("icrawler batch fetch failed: %s", exc)
@@ -339,6 +367,32 @@ class ImageFetcher:
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    def _check_aspect_ratio(self, image_path: Path, min_ratio: float = 9/16, max_ratio: float = 16/9) -> bool:
+        """画像のアスペクト比をチェックし、16:9と9:16の範囲内か確認"""
+        try:
+            with Image.open(image_path) as img:
+                width, height = img.size
+                if height == 0:
+                    logger.debug("画像の高さが0: %s", image_path.name)
+                    return False
+                aspect_ratio = width / height
+                
+                # アスペクト比が範囲内かチェック（9:16 から 16:9）
+                is_valid = min_ratio <= aspect_ratio <= max_ratio
+                
+                if not is_valid:
+                    logger.debug(
+                        "画像を除外（アスペクト比: %.3f, 範囲: %.3f〜%.3f）: %s",
+                        aspect_ratio,
+                        min_ratio,
+                        max_ratio,
+                        image_path.name
+                    )
+                return is_valid
+        except Exception as e:
+            logger.warning("アスペクト比チェックエラー (%s): %s", image_path, e)
+            return True  # エラー時は許可（既存の動作を維持）
 
     def _build_openverse_params(self, query: str, *, page_size: Optional[int] = None) -> Dict[str, str | int]:
         sanitized_query = query.strip()[:200]

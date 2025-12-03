@@ -28,6 +28,8 @@ shashin_mode/referenceimage/
 shashin_mode/tmp/
 shashin_mode/**/*.mp4
 shashin_mode/**/*.wav
+shashin_mode/scripts/auto_generated/
+shashin_mode/scripts/youtube_generated/
 
 # OS-specific cruft
 .DS_Store

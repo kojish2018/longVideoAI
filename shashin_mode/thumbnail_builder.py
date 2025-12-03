@@ -54,37 +54,17 @@ def generate_thumbnail(
 
     canvas = Image.new("RGB", CANVAS_SIZE, BACKGROUND_COLOR)
 
+    top_area_height = 470
     margin = 20
-    
-    # バナーのフォントとサイズを計算
-    banner_font = _load_font(FONT_SECONDARY_CANDIDATES, size=80)
-    text_bbox = banner_font.getbbox(banner_text)
-    text_width = text_bbox[2] - text_bbox[0]
-    banner_box_width = text_width + 40
-    banner_box_height = 120  # Fixed height: 120px
-    banner_box_x0 = 80
-    
-    # 画像エリアの下端を決める（バナーの上端位置に合わせる）
-    # バナーの位置: banner_box_y0 = yellow_top - 160
-    # 黄色いバーの位置: yellow_top = image_area_bottom + 10
-    # つまり: banner_box_y0 = (image_area_bottom + 10) - 160 = image_area_bottom - 150
-    # 画像エリアの下端をバナーの上端にしたいので、固定値で設定
-    # バナーの高さ120px + 余白30pxを考慮して、画像エリアの下端を設定
-    image_area_bottom = 320  # この値がバナーの上端になる
-    
-    # 左右の画像エリアを50%ずつに分割
-    canvas_width = CANVAS_SIZE[0]
-    left_rect = (0, margin, canvas_width // 2, image_area_bottom)
-    right_rect = (canvas_width // 2, margin, canvas_width, image_area_bottom)
 
-    # 方法1のクロップ方式で画像を貼り付け
+    left_rect = (margin, margin, CANVAS_SIZE[0] // 2 + 40, top_area_height)
+    right_rect = (left_rect[2] + margin, margin, CANVAS_SIZE[0] - margin, top_area_height)
+
     _paste_cover(usable_images[0], canvas, left_rect)
     _paste_cover(usable_images[min(1, len(usable_images) - 1)], canvas, right_rect)
 
     draw = ImageDraw.Draw(canvas)
-    
-    # 黄色いバーは画像エリアの下から
-    yellow_top = image_area_bottom + 10
+    yellow_top = top_area_height + 10
     yellow_bottom = CANVAS_SIZE[1]
     draw.rectangle([(0, yellow_top), (CANVAS_SIZE[0], yellow_bottom)], fill=YELLOW_BAR_COLOR)
 
@@ -97,8 +77,18 @@ def generate_thumbnail(
         max_size=220,
     )
 
-    # バナーの位置を計算（画像エリアの下端 = バナーの上端）
-    banner_box_y0 = image_area_bottom
+    # Define banner box (subs text area)
+    # Fixed font size: 80px
+    banner_font = _load_font(FONT_SECONDARY_CANDIDATES, size=80)
+    
+    # Calculate text width to determine banner width (text width + 40px padding)
+    text_bbox = banner_font.getbbox(banner_text)
+    text_width = text_bbox[2] - text_bbox[0]
+    banner_box_width = text_width + 40
+    banner_box_height = 120  # Fixed height: 120px
+    
+    banner_box_x0 = 80
+    banner_box_y0 = yellow_top - 160
 
     _draw_centered_text(
         draw,
@@ -147,13 +137,13 @@ def _paste_cover(image: Image.Image, canvas: Image.Image, rect: Tuple[int, int, 
     target_width = rect[2] - rect[0]
     target_height = rect[3] - rect[1]
     
-    # 領域を完全に覆うようにスケール（minを使用）
-    scale = min(target_width / image.width, target_height / image.height)
+    # 領域を完全に覆うようにスケール（maxを使用：横幅と縦幅の両方を確実に満たす）
+    scale = max(target_width / image.width, target_height / image.height)
     resized_width = int(image.width * scale)
     resized_height = int(image.height * scale)
     resized = image.resize((resized_width, resized_height), Image.LANCZOS)
     
-    # 中央部分をクロップ
+    # 中央部分をクロップ（横幅と縦幅の両方を確実に満たす）
     crop_x = (resized_width - target_width) // 2
     crop_y = (resized_height - target_height) // 2
     cropped = resized.crop((
@@ -304,6 +294,19 @@ def _draw_slanted_banner(
     banner = Image.new("RGBA", box_size, (0, 0, 0, 0))
     banner_draw = ImageDraw.Draw(banner)
     banner_draw.rectangle([(0, 0), (box_size[0], box_size[1])], fill=WHITE, outline=BLACK, width=6)
+
+    # テキストがバナーの幅に収まるようにフォントサイズを調整
+    # 左右の余白を考慮（各10px）
+    available_width = box_size[0] - 20
+    text_bbox = font.getbbox(text)
+    text_width = text_bbox[2] - text_bbox[0]
+    
+    # テキストがバナーの幅を超える場合は、フォントサイズを縮小
+    if text_width > available_width:
+        # フォントサイズを調整（最小40pxまで）
+        scale_factor = available_width / text_width
+        new_size = max(40, int(font.size * scale_factor * 0.95))  # 0.95は安全マージン
+        font = _load_font(FONT_SECONDARY_CANDIDATES, size=new_size)
 
     # Center text in the box using anchor="mm" (middle-middle)
     box_center_x = box_size[0] // 2

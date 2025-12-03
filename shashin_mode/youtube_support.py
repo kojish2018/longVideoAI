@@ -190,12 +190,19 @@ def build_youtube_metadata(
 
 
 def _extract_title_from_document(document: ScriptDocument) -> str:
-    for chunk in document.chunks:
-        for line in chunk.lines:
-            cleaned = line.strip()
-            if cleaned:
-                return cleaned[:100]
-    return ""
+    """最初のチャンクの全行を結合してタイトルとして抽出"""
+    if not document.chunks:
+        return ""
+    
+    # 最初のチャンクの全行を結合
+    first_chunk = document.chunks[0]
+    title_lines = [line.strip() for line in first_chunk.lines if line.strip()]
+    if not title_lines:
+        return ""
+    
+    # 複数行を結合（スペース区切り）
+    title = " ".join(title_lines)
+    return title[:100]  # YouTubeタイトルの最大長に合わせて制限
 
 
 def _build_description(config: AppConfig, title: str, total_duration: float) -> str:

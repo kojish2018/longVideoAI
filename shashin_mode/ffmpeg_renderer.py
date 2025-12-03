@@ -299,14 +299,14 @@ class FFmpegShashinRenderer:
             bgm_path,
             total_duration,
             fade_out_st,
-            0.24,
+            0.6,
             "on",
         )
         filter_complex = (
             # Prepare BGM: EBU R128 normalize first, then reduce level, fade, and format
             f"[1:a]atrim=0:duration={total_duration:.3f},asetpts=PTS-STARTPTS,"
             f"loudnorm=I=-30:LRA=7:TP=-2,"
-            f"volume=0.24,afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out_st:.3f}:d=1.0,"
+            f"volume=0.6,afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out_st:.3f}:d=1.0,"
             f"aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo[bgm];"
             # Prepare narration: force stereo @ sample rate
             f"[0:a]aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo[narr];"
